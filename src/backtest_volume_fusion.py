@@ -1,0 +1,1267 @@
+"""
+src/backtest_volume_fusion.py
+==============================
+Gold Volume Fusion Elite — Python Backtesting Engine
+======================================================
+Implementa la misma estrategia que el EA de MT5:
+  OBV, VWAP, MFI, A/D, CMF, Volume Profile,
+  Chaikin Oscillator, VPT, VROC, PVI, NVI
+
+Backtesting: 10 años XAUUSD (GC=F COMEX)
+TFs: 15m, 30m, 1h, 2h, 3h, 4h
+3 iteraciones con optimización de parámetros
+
+Objetivos:
+  Sharpe >= 1.0 | MaxDD <= 8% | Min 7 trades/mes
+  Min monthly return >= 1.5% | Max daily loss <= 1.5%
+"""
+
+from __future__ import annotations
+
+import warnings
+warnings.filterwarnings('ignore')
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
+import json
+import os
+import sys
+
+# ──────────────────────────────────────────────────────────────────
+# PARÁMETROS — Iteración 1 (base)
+# ──────────────────────────────────────────────────────────────────
+PARAMS_V1 = {
+    "risk_pct":          0.50,   # % riesgo por trade
+    "daily_loss_limit":  1.50,   # % pérdida diaria máxima
+    "weekly_loss_limit": 3.00,   # % pérdida semanal máxima
+    "max_trades_day":    2,
+    "max_trades_week":   6,
+    # Volume indicators
+    "obv_ma_period":     20,
+    "cmf_period":        20,
+    "cmf_threshold":     0.05,
+    "mfi_period":        14,
+    "mfi_neutral_low":   35.0,
+    "mfi_neutral_high":  65.0,
+    "mfi_oversold":      25.0,
+    "mfi_overbought":    75.0,
+    "chaikin_fast":      3,
+    "chaikin_slow":      10,
+    "vpt_ma_period":     14,
+    "vroc_period":       14,
+    "pvi_ma_period":     255,
+    "nvi_ma_period":     255,
+    "vp_period":         100,    # barras para Volume Profile
+    "vp_zones":          20,
+    "vp_poc_buffer":     0.003,  # 0.3% distancia al POC
+    # Risk/reward
+    "atr_period":        14,
+    "sl_atr_mult":       1.8,
+    "min_sl_pct":        0.002,  # mínimo SL 0.2%
+    "tp1_ratio":         2.0,
+    "tp2_ratio":         4.0,
+    "tp3_ratio":         6.5,
+    "tp1_pct":           0.40,   # cierra 40% en TP1
+    "tp2_pct":           0.35,   # cierra 35% en TP2
+    # Entry scoring
+    "min_score":         5,      # mínimo de 5/12 puntos
+    "high_conf_score":   8,
+    # Session filters (UTC hour)
+    "london_start":      8,
+    "london_end":        11,
+    "overlap_start":     13,
+    "overlap_end":       17,
+    "filter_weekdays":   True,   # solo Mar-Jue
+    # ADR filter
+    "adr_period":        14,
+    "adr_max_used":      0.65,
+}
+
+# Objetivos objetivo (del objectives.yaml)
+OBJECTIVES = {
+    "min_sharpe":         1.0,
+    "max_drawdown":       8.0,
+    "max_daily_loss":     1.5,
+    "min_trades_month":   7,
+    "min_monthly_return": 1.5,
+}
+
+# ──────────────────────────────────────────────────────────────────
+# 1. DESCARGA DE DATOS
+# ──────────────────────────────────────────────────────────────────
+def download_data(symbol: str = "GC=F",
+                  start: str = "2015-01-01",
+                  end:   str = "2025-01-01",
+                  interval: str = "1d") -> pd.DataFrame:
+    """
+    Descarga datos OHLCV de yfinance.
+    GC=F = Gold Futures COMEX (volumen real).
+    Para intervalos intradiarios >= 1h usa hasta ~2 años.
+    """
+    print(f"  Descargando {symbol} {interval} desde {start} hasta {end}...")
+
+    # yfinance limita intraday histórico
+    intraday_intervals = ["1m","2m","5m","15m","30m","60m","1h","90m"]
+    if interval in intraday_intervals:
+        # Descargar en chunks de 59 días para intervalos < 1h
+        # Para 1h/60m descarga ~730 días
+        df = yf.download(symbol, start=start, end=end,
+                         interval=interval, auto_adjust=True,
+                         progress=False)
+        if df.empty:
+            # Fallback: usar lo disponible
+            print(f"  WARNING: No hay datos intradiarios para {interval}, usando datos disponibles")
+            df = yf.download(symbol, period="730d" if interval in ["60m","1h"] else "60d",
+                             interval=interval, auto_adjust=True, progress=False)
+    else:
+        df = yf.download(symbol, start=start, end=end,
+                         interval=interval, auto_adjust=True,
+                         progress=False)
+
+    if df.empty:
+        raise ValueError(f"No se pudieron descargar datos para {symbol} {interval}")
+
+    # Aplanar MultiIndex si existe
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df[["Open","High","Low","Close","Volume"]].dropna()
+    df.index = pd.to_datetime(df.index, utc=True)
+    print(f"  OK: {len(df)} barras desde {df.index[0]} hasta {df.index[-1]}")
+    return df
+
+
+def resample_data(df_1h: pd.DataFrame, tf: str) -> pd.DataFrame:
+    """Remuestrea datos horarios a mayor timeframe."""
+    rule_map = {
+        "15min": "15min",
+        "30min": "30min",
+        "1h":    "1h",
+        "2h":    "2h",
+        "3h":    "3h",
+        "4h":    "4h",
+    }
+    rule = rule_map.get(tf, tf)
+    resampled = df_1h.resample(rule).agg({
+        "Open":   "first",
+        "High":   "max",
+        "Low":    "min",
+        "Close":  "last",
+        "Volume": "sum"
+    }).dropna()
+    return resampled
+
+
+# ──────────────────────────────────────────────────────────────────
+# 2. INDICADORES DE VOLUMEN
+# ──────────────────────────────────────────────────────────────────
+class VolumeIndicators:
+    """Calcula todos los indicadores de volumen sobre un DataFrame OHLCV."""
+
+    @staticmethod
+    def obv(df: pd.DataFrame, ma_period: int = 20) -> pd.DataFrame:
+        """On-Balance Volume + su MA."""
+        direction = np.sign(df["Close"].diff())
+        direction.iloc[0] = 0
+        obv = (direction * df["Volume"]).cumsum()
+        df["OBV"]    = obv
+        df["OBV_MA"] = obv.ewm(span=ma_period, adjust=False).mean()
+        return df
+
+    @staticmethod
+    def vwap_daily(df: pd.DataFrame) -> pd.DataFrame:
+        """VWAP con reset diario (a las 22:00 UTC = apertura Asia)."""
+        tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+        # Grupo por día de trading (apertura 22:00 UTC)
+        df["_trading_day"] = (df.index.hour < 22).astype(int)
+        df["_day_label"] = (df.index.date.astype(str))
+        # Ajuste: si hora >= 22, pertenece al "día siguiente de trading"
+        adjusted = df.index - pd.Timedelta(hours=22)
+        day_group = adjusted.date
+
+        cumsum_pv = (tp * df["Volume"]).groupby(day_group).cumsum()
+        cumsum_v  = df["Volume"].groupby(day_group).cumsum()
+        df["VWAP"] = cumsum_pv / cumsum_v.replace(0, np.nan)
+        df.drop(columns=["_trading_day", "_day_label"], inplace=True, errors="ignore")
+        return df
+
+    @staticmethod
+    def mfi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """Money Flow Index (RSI ponderado por volumen)."""
+        tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+        mf = tp * df["Volume"]
+
+        tp_diff = tp.diff()
+        pos_mf = mf.where(tp_diff > 0, 0.0)
+        neg_mf = mf.where(tp_diff < 0, 0.0)
+
+        pos_sum = pos_mf.rolling(period).sum()
+        neg_sum = neg_mf.abs().rolling(period).sum()
+
+        mfr = pos_sum / neg_sum.replace(0, np.nan)
+        df["MFI"] = 100.0 - (100.0 / (1.0 + mfr))
+        return df
+
+    @staticmethod
+    def ad_line(df: pd.DataFrame) -> pd.DataFrame:
+        """Accumulation/Distribution Line."""
+        hl = df["High"] - df["Low"]
+        clv = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / hl.replace(0, np.nan)
+        df["AD"] = (clv * df["Volume"]).cumsum()
+        return df
+
+    @staticmethod
+    def cmf(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """Chaikin Money Flow."""
+        hl = df["High"] - df["Low"]
+        clv = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / hl.replace(0, np.nan)
+        mfv = clv * df["Volume"]
+        df["CMF"] = mfv.rolling(period).sum() / df["Volume"].rolling(period).sum().replace(0, np.nan)
+        return df
+
+    @staticmethod
+    def chaikin_oscillator(df: pd.DataFrame, fast: int = 3, slow: int = 10) -> pd.DataFrame:
+        """Chaikin Oscillator = EMA_fast(AD) - EMA_slow(AD)."""
+        if "AD" not in df.columns:
+            df = VolumeIndicators.ad_line(df)
+        df["ChaikinOsc"] = (
+            df["AD"].ewm(span=fast, adjust=False).mean() -
+            df["AD"].ewm(span=slow, adjust=False).mean()
+        )
+        return df
+
+    @staticmethod
+    def vpt(df: pd.DataFrame, ma_period: int = 14) -> pd.DataFrame:
+        """Volume Price Trend."""
+        pct_change = df["Close"].pct_change()
+        vpt_val = (pct_change * df["Volume"]).cumsum()
+        df["VPT"]    = vpt_val
+        df["VPT_MA"] = vpt_val.ewm(span=ma_period, adjust=False).mean()
+        return df
+
+    @staticmethod
+    def vroc(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """Volume Rate of Change."""
+        df["VROC"] = df["Volume"].pct_change(period) * 100.0
+        return df
+
+    @staticmethod
+    def pvi_nvi(df: pd.DataFrame,
+                pvi_ma: int = 255, nvi_ma: int = 255) -> pd.DataFrame:
+        """
+        Positive Volume Index (sube cuando volumen sube — retail)
+        Negative Volume Index (sube cuando volumen baja — smart money)
+        """
+        pct = df["Close"].pct_change()
+        vol_up   = df["Volume"] > df["Volume"].shift(1)
+        vol_down = df["Volume"] < df["Volume"].shift(1)
+
+        pvi_arr = np.ones(len(df)) * 1000.0
+        nvi_arr = np.ones(len(df)) * 1000.0
+
+        for i in range(1, len(df)):
+            if vol_up.iloc[i]:
+                pvi_arr[i] = pvi_arr[i-1] * (1.0 + pct.iloc[i])
+            else:
+                pvi_arr[i] = pvi_arr[i-1]
+
+            if vol_down.iloc[i]:
+                nvi_arr[i] = nvi_arr[i-1] * (1.0 + pct.iloc[i])
+            else:
+                nvi_arr[i] = nvi_arr[i-1]
+
+        df["PVI"] = pvi_arr
+        df["NVI"] = nvi_arr
+
+        # MAs para señal (EMA)
+        df["PVI_MA"] = pd.Series(pvi_arr, index=df.index).ewm(span=pvi_ma, adjust=False).mean()
+        df["NVI_MA"] = pd.Series(nvi_arr, index=df.index).ewm(span=nvi_ma, adjust=False).mean()
+        return df
+
+    @staticmethod
+    def volume_profile(df: pd.DataFrame,
+                       period: int = 100,
+                       zones: int = 20,
+                       poc_buffer: float = 0.003) -> pd.DataFrame:
+        """
+        Volume Profile simulado con rolling window.
+        Calcula POC, VAH, VAL para cada barra.
+        """
+        n = len(df)
+        poc = np.full(n, np.nan)
+        vah = np.full(n, np.nan)
+        val = np.full(n, np.nan)
+        vp_zone = np.zeros(n, dtype=int)
+
+        for i in range(period, n):
+            window = df.iloc[i-period:i]
+            h_max = window["High"].max()
+            h_min = window["Low"].min()
+            rng = h_max - h_min
+            if rng <= 0:
+                poc[i] = df["Close"].iloc[i]
+                vah[i] = poc[i] * 1.002
+                val[i] = poc[i] * 0.998
+                continue
+
+            zone_size = rng / zones
+            zone_centers = h_min + (np.arange(zones) + 0.5) * zone_size
+            zone_vols = np.zeros(zones)
+
+            tp = (window["High"] + window["Low"] + window["Close"]) / 3.0
+            for j in range(len(window)):
+                z = int((tp.iloc[j] - h_min) / zone_size)
+                z = max(0, min(zones - 1, z))
+                zone_vols[z] += window["Volume"].iloc[j]
+
+            poc_idx = np.argmax(zone_vols)
+            poc[i] = zone_centers[poc_idx]
+
+            # Value Area 70%
+            total_vol = zone_vols.sum()
+            target = total_vol * 0.70
+            va_lo = va_hi = poc_idx
+            va_vol = zone_vols[poc_idx]
+
+            while va_vol < target:
+                ext_lo = zone_vols[va_lo - 1] if va_lo > 0 else 0
+                ext_hi = zone_vols[va_hi + 1] if va_hi < zones - 1 else 0
+                if ext_hi >= ext_lo and va_hi < zones - 1:
+                    va_hi += 1
+                    va_vol += zone_vols[va_hi]
+                elif va_lo > 0:
+                    va_lo -= 1
+                    va_vol += zone_vols[va_lo]
+                else:
+                    break
+
+            vah[i] = zone_centers[va_hi] + zone_size * 0.5
+            val[i] = zone_centers[va_lo] - zone_size * 0.5
+
+            # Zona del precio actual
+            cp = df["Close"].iloc[i]
+            if cp > vah[i]:
+                vp_zone[i] = 1
+            elif cp < val[i]:
+                vp_zone[i] = -1
+            else:
+                vp_zone[i] = 0
+
+        df["VP_POC"]  = poc
+        df["VP_VAH"]  = vah
+        df["VP_VAL"]  = val
+        df["VP_ZONE"] = vp_zone
+        return df
+
+    @staticmethod
+    def add_all(df: pd.DataFrame, p: dict) -> pd.DataFrame:
+        """Agrega todos los indicadores de volumen al DataFrame."""
+        print("    Calculando indicadores de volumen...")
+        df = VolumeIndicators.obv(df, p["obv_ma_period"])
+        df = VolumeIndicators.vwap_daily(df)
+        df = VolumeIndicators.mfi(df, p["mfi_period"])
+        df = VolumeIndicators.ad_line(df)
+        df = VolumeIndicators.cmf(df, p["cmf_period"])
+        df = VolumeIndicators.chaikin_oscillator(df, p["chaikin_fast"], p["chaikin_slow"])
+        df = VolumeIndicators.vpt(df, p["vpt_ma_period"])
+        df = VolumeIndicators.vroc(df, p["vroc_period"])
+        df = VolumeIndicators.pvi_nvi(df, p["pvi_ma_period"], p["nvi_ma_period"])
+        df = VolumeIndicators.volume_profile(df, p["vp_period"], p["vp_zones"], p["vp_poc_buffer"])
+
+        # ATR para stops
+        tr = pd.concat([
+            df["High"] - df["Low"],
+            (df["High"] - df["Close"].shift(1)).abs(),
+            (df["Low"]  - df["Close"].shift(1)).abs()
+        ], axis=1).max(axis=1)
+        df["ATR"] = tr.rolling(p["atr_period"]).mean()
+
+        # EMAs de tendencia
+        df["EMA20"]  = df["Close"].ewm(span=20,  adjust=False).mean()
+        df["EMA50"]  = df["Close"].ewm(span=50,  adjust=False).mean()
+        df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
+
+        # ADR para filtro (usa datos diarios del mismo df)
+        df["DailyRange"] = df["High"] - df["Low"]
+        df["ADR"] = df["DailyRange"].rolling(p["adr_period"]).mean()
+
+        return df
+
+
+# ──────────────────────────────────────────────────────────────────
+# 3. SCORING ENGINE — Gold Volume Fusion Score
+# ──────────────────────────────────────────────────────────────────
+def calculate_gvfs(row: pd.Series, p: dict) -> int:
+    """
+    Calcula el Gold Volume Fusion Score (-12 a +12).
+    Positivo = señal alcista, negativo = señal bajista.
+    """
+    score = 0
+
+    # 1. OBV vs su MA
+    if pd.notna(row.get("OBV")) and pd.notna(row.get("OBV_MA")):
+        score += 1 if row["OBV"] > row["OBV_MA"] else -1
+
+    # 2. Precio vs VWAP
+    if pd.notna(row.get("VWAP")):
+        score += 1 if row["Close"] > row["VWAP"] else -1
+
+    # 3. CMF
+    if pd.notna(row.get("CMF")):
+        if   row["CMF"] >  p["cmf_threshold"]: score += 1
+        elif row["CMF"] < -p["cmf_threshold"]: score -= 1
+
+    # 4. MFI
+    if pd.notna(row.get("MFI")):
+        mfi = row["MFI"]
+        if   mfi < p["mfi_oversold"]:   score += 1  # oversold = oportunidad long
+        elif mfi > p["mfi_overbought"]: score -= 1  # overbought = oportunidad short
+        elif p["mfi_neutral_low"] <= mfi <= p["mfi_neutral_high"]:
+            # neutral: confirmar con OBV
+            if pd.notna(row.get("OBV")) and pd.notna(row.get("OBV_MA")):
+                score += 1 if row["OBV"] > row["OBV_MA"] else -1
+
+    # 5. Chaikin Oscillator (momentum A/D)
+    if pd.notna(row.get("ChaikinOsc")):
+        score += 1 if row["ChaikinOsc"] > 0 else -1
+
+    # 6. VPT vs su MA
+    if pd.notna(row.get("VPT")) and pd.notna(row.get("VPT_MA")):
+        score += 1 if row["VPT"] > row["VPT_MA"] else -1
+
+    # 7. VROC (volumen aumentando = confirmación)
+    if pd.notna(row.get("VROC")):
+        score += 1 if row["VROC"] > 0 else -1
+
+    # 8. NVI > NVI_MA (smart money alcista)
+    if pd.notna(row.get("NVI")) and pd.notna(row.get("NVI_MA")):
+        score += 1 if row["NVI"] > row["NVI_MA"] else -1
+
+    # 9. PVI > PVI_MA (retail confirma tendencia)
+    if pd.notna(row.get("PVI")) and pd.notna(row.get("PVI_MA")):
+        score += 1 if row["PVI"] > row["PVI_MA"] else -1
+
+    # 10. Volume Profile: posición del precio
+    if pd.notna(row.get("VP_POC")):
+        poc_dist = abs(row["Close"] - row["VP_POC"]) / row["Close"]
+        if poc_dist < p["vp_poc_buffer"]:
+            # Cerca del POC: CMF decide
+            if pd.notna(row.get("CMF")):
+                score += 1 if row["CMF"] > 0 else -1
+        elif pd.notna(row.get("VP_ZONE")):
+            if row["VP_ZONE"] == 0:  # Dentro del Value Area
+                if pd.notna(row.get("OBV")) and pd.notna(row.get("OBV_MA")):
+                    score += 1 if row["OBV"] > row["OBV_MA"] else -1
+
+    # 11. EMA trend alignment bonus
+    if pd.notna(row.get("EMA20")) and pd.notna(row.get("EMA50")) and pd.notna(row.get("EMA200")):
+        if row["EMA20"] > row["EMA50"] > row["EMA200"]:
+            if score > 0: score = min(score + 1, 12)
+        elif row["EMA20"] < row["EMA50"] < row["EMA200"]:
+            if score < 0: score = max(score - 1, -12)
+
+    return score
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4. SESSION FILTER
+# ──────────────────────────────────────────────────────────────────
+def is_valid_session(ts: pd.Timestamp, p: dict) -> bool:
+    """Verifica si el timestamp está en sesión válida (UTC)."""
+    hour = ts.hour
+    dow  = ts.dayofweek  # 0=Lun, 4=Vie, 5=Sab, 6=Dom
+
+    # Fin de semana
+    if dow >= 5: return False
+
+    # Filtro días
+    if p.get("filter_weekdays"):
+        # Solo martes (1), miércoles (2), jueves (3)
+        if dow not in [1, 2, 3]: return False
+
+    # Viernes tarde
+    if dow == 4 and hour >= 14: return False
+
+    # Ventana London
+    london  = p["london_start"] <= hour < p["london_end"]
+    # Ventana Overlap NY-London
+    overlap = p["overlap_start"] <= hour < p["overlap_end"]
+
+    return london or overlap
+
+
+def is_valid_dayofweek(ts: pd.Timestamp, p: dict) -> bool:
+    """Filtro por día de la semana (más suave, para datos diarios)."""
+    dow = ts.dayofweek
+    if dow >= 5: return False
+    if p.get("filter_weekdays") and dow not in [1, 2, 3]: return False
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────
+# 5. BACKTESTING ENGINE
+# ──────────────────────────────────────────────────────────────────
+class GoldBacktester:
+    """
+    Motor de backtesting para la estrategia Gold Volume Fusion Elite.
+    Soporta múltiples timeframes y gestión de posiciones escalada.
+    """
+
+    def __init__(self, df: pd.DataFrame, params: dict,
+                 initial_balance: float = 100_000.0,
+                 is_intraday: bool = True):
+        self.df      = df.copy()
+        self.p       = params
+        self.balance = initial_balance
+        self.equity  = initial_balance
+        self.is_intraday = is_intraday
+
+        # Estado del backtesting
+        self.trades: list[dict] = []
+        self.equity_curve: list[tuple] = []
+        self.open_positions: list[dict] = []
+        self.daily_start_balance   = initial_balance
+        self.weekly_start_balance  = initial_balance
+        self.daily_trades   = 0
+        self.weekly_trades  = 0
+        self.last_day  = None
+        self.last_week = None
+
+    def run(self, verbose: bool = True) -> pd.DataFrame:
+        """Ejecuta el backtest barra por barra."""
+        if verbose:
+            print("    Ejecutando backtest...")
+        warmup = max(
+            self.p["nvi_ma_period"],
+            self.p["pvi_ma_period"],
+            self.p["vp_period"],
+            self.p["adr_period"] * 5,
+            300
+        )
+
+        for i in range(warmup, len(self.df)):
+            row = self.df.iloc[i]
+            ts  = self.df.index[i]
+
+            # Reset contadores
+            self._reset_daily(ts)
+            self._reset_weekly(ts)
+
+            # Actualizar posiciones abiertas
+            self._update_positions(row, ts)
+
+            # Registrar equity
+            self.equity_curve.append((ts, self.equity))
+
+            # Filtros de entrada
+            if not self._can_open():
+                continue
+
+            # Filtro de sesión
+            if self.is_intraday and not is_valid_session(ts, self.p):
+                continue
+            elif not self.is_intraday and not is_valid_dayofweek(ts, self.p):
+                continue
+
+            # Calcular score
+            score = calculate_gvfs(row, self.p)
+
+            # ADR filter
+            if not self._adr_filter(row):
+                continue
+
+            # Entrada
+            if score >= self.p["min_score"]:
+                self._open_trade(row, ts, score, direction=1)
+            elif score <= -self.p["min_score"]:
+                self._open_trade(row, ts, score, direction=-1)
+
+        # Cerrar posiciones abiertas al final
+        last_row = self.df.iloc[-1]
+        for pos in self.open_positions[:]:
+            self._close_position(pos, last_row["Close"], self.df.index[-1], "EOD")
+        self.open_positions.clear()
+
+        return pd.DataFrame(self.trades)
+
+    def _reset_daily(self, ts: pd.Timestamp):
+        day = ts.date()
+        if self.last_day != day:
+            self.daily_start_balance = self.balance
+            self.daily_trades = 0
+            self.last_day = day
+
+    def _reset_weekly(self, ts: pd.Timestamp):
+        week = ts.isocalendar()[:2]
+        if self.last_week != week:
+            self.weekly_start_balance = self.balance
+            self.weekly_trades = 0
+            self.last_week = week
+
+    def _can_open(self) -> bool:
+        # Límite de trades
+        if self.daily_trades  >= self.p["max_trades_day"]:  return False
+        if self.weekly_trades >= self.p["max_trades_week"]: return False
+
+        # Daily loss limit
+        daily_loss = (self.balance - self.daily_start_balance) / self.daily_start_balance * 100
+        if daily_loss < -self.p["daily_loss_limit"]: return False
+
+        # Weekly loss limit
+        weekly_loss = (self.balance - self.weekly_start_balance) / self.weekly_start_balance * 100
+        if weekly_loss < -self.p["weekly_loss_limit"]: return False
+
+        return True
+
+    def _adr_filter(self, row: pd.Series) -> bool:
+        """No entrar si el rango del día ya superó el límite del ADR."""
+        if pd.isna(row.get("ADR")) or row["ADR"] == 0:
+            return True
+        today_range = row["High"] - row["Low"]
+        return (today_range / row["ADR"]) < self.p["adr_max_used"]
+
+    def _calc_lot_size(self, price: float, sl_dist: float) -> float:
+        """Calcula tamaño de posición basado en % riesgo."""
+        risk_usd = self.balance * self.p["risk_pct"] / 100.0
+        # Para XAU/USD: 1 lote = 100 oz, valor pip ~$1 por 0.01 usd
+        # En GC Futures: 1 contrato = 100 oz; pip = 0.10 = $10
+        # Para XAUUSD spot: valor de 1 pip (0.01) = $1 por 0.01 lote
+        # Simplificación: lot_size = risk_usd / (sl_dist * 100)
+        # Donde sl_dist está en USD y 1 lote = 100 oz
+        if sl_dist == 0:
+            return 0.01
+        lots = risk_usd / (sl_dist * 100.0)
+        return max(0.01, round(lots, 2))
+
+    def _open_trade(self, row: pd.Series, ts: pd.Timestamp,
+                    score: int, direction: int):
+        """Abre una nueva posición (dividida en 3 sub-posiciones para TP)."""
+        if pd.isna(row.get("ATR")) or row["ATR"] == 0:
+            return
+
+        entry = row["Close"]
+        atr   = row["ATR"]
+        sl_dist = max(atr * self.p["sl_atr_mult"],
+                      entry * self.p["min_sl_pct"])
+
+        sl  = entry - direction * sl_dist
+        tp1 = entry + direction * sl_dist * self.p["tp1_ratio"]
+        tp2 = entry + direction * sl_dist * self.p["tp2_ratio"]
+        tp3 = entry + direction * sl_dist * self.p["tp3_ratio"]
+
+        # Ajustar riesgo por score
+        risk_mult = 1.0 if abs(score) >= self.p["high_conf_score"] else 0.75
+        lots = self._calc_lot_size(entry, sl_dist) * risk_mult
+
+        pos = {
+            "id":          len(self.trades),
+            "open_time":   ts,
+            "entry":       entry,
+            "direction":   direction,
+            "score":       score,
+            "sl":          sl,
+            "tp1":         tp1,
+            "tp2":         tp2,
+            "tp3":         tp3,
+            "lots":        lots,
+            "lots_remaining": lots,
+            "tp1_hit":     False,
+            "tp2_hit":     False,
+            "sl_at_be":    False,
+            "status":      "open",
+        }
+        self.open_positions.append(pos)
+        self.daily_trades  += 1
+        self.weekly_trades += 1
+
+    def _update_positions(self, row: pd.Series, ts: pd.Timestamp):
+        """Verifica TP/SL de posiciones abiertas."""
+        for pos in self.open_positions[:]:
+            d     = pos["direction"]
+            entry = pos["entry"]
+            price_high = row["High"]
+            price_low  = row["Low"]
+            price_close= row["Close"]
+
+            # Determinar precio favorable/adverso
+            fav   = price_high if d == 1 else price_low
+            adv   = price_low  if d == 1 else price_high
+
+            # Verificar SL
+            sl_hit = (d == 1 and adv <= pos["sl"]) or (d == -1 and adv >= pos["sl"])
+            if sl_hit:
+                self._close_position(pos, pos["sl"], ts, "SL")
+                continue
+
+            # TP1
+            if not pos["tp1_hit"]:
+                tp1_hit = (d == 1 and fav >= pos["tp1"]) or (d == -1 and fav <= pos["tp1"])
+                if tp1_hit:
+                    close_lots = pos["lots"] * self.p["tp1_pct"]
+                    self._record_partial_close(pos, pos["tp1"], ts, close_lots, "TP1")
+                    pos["lots_remaining"] -= close_lots
+                    pos["tp1_hit"] = True
+                    # Mover SL a breakeven
+                    pos["sl"] = entry
+                    pos["sl_at_be"] = True
+                    continue
+
+            # TP2
+            if pos["tp1_hit"] and not pos["tp2_hit"]:
+                tp2_hit = (d == 1 and fav >= pos["tp2"]) or (d == -1 and fav <= pos["tp2"])
+                if tp2_hit:
+                    close_lots = pos["lots"] * self.p["tp2_pct"]
+                    self._record_partial_close(pos, pos["tp2"], ts, close_lots, "TP2")
+                    pos["lots_remaining"] -= close_lots
+                    pos["tp2_hit"] = True
+                    # Trailing stop a TP1
+                    pos["sl"] = pos["tp1"]
+                    continue
+
+            # TP3 (resto de la posición)
+            if pos["tp1_hit"] and pos["tp2_hit"]:
+                tp3_hit = (d == 1 and fav >= pos["tp3"]) or (d == -1 and fav <= pos["tp3"])
+                if tp3_hit:
+                    self._close_position(pos, pos["tp3"], ts, "TP3")
+                    continue
+
+                # Trailing stop con EMA20
+                if pd.notna(row.get("EMA20")) and pd.notna(row.get("ATR")):
+                    if d == 1:
+                        trail = row["EMA20"] - row["ATR"] * 0.5
+                        if trail > pos["sl"]:
+                            pos["sl"] = trail
+                    else:
+                        trail = row["EMA20"] + row["ATR"] * 0.5
+                        if trail < pos["sl"]:
+                            pos["sl"] = trail
+
+    def _record_partial_close(self, pos: dict, close_price: float,
+                               ts: pd.Timestamp, lots: float, reason: str):
+        """Registra un cierre parcial."""
+        pnl = (close_price - pos["entry"]) * pos["direction"] * lots * 100.0
+        self.balance += pnl
+        self.equity   = self.balance
+        self.trades.append({
+            "open_time":  pos["open_time"],
+            "close_time": ts,
+            "entry":      pos["entry"],
+            "exit":       close_price,
+            "direction":  pos["direction"],
+            "score":      pos["score"],
+            "lots":       lots,
+            "pnl_usd":    pnl,
+            "pnl_pct":    pnl / (self.balance - pnl) * 100,
+            "reason":     reason,
+            "duration_h": (ts - pos["open_time"]).total_seconds() / 3600,
+        })
+
+    def _close_position(self, pos: dict, close_price: float,
+                        ts: pd.Timestamp, reason: str):
+        """Cierra toda la posición restante."""
+        lots = pos.get("lots_remaining", pos["lots"])
+        pnl  = (close_price - pos["entry"]) * pos["direction"] * lots * 100.0
+        self.balance += pnl
+        self.equity   = self.balance
+
+        self.trades.append({
+            "open_time":  pos["open_time"],
+            "close_time": ts,
+            "entry":      pos["entry"],
+            "exit":       close_price,
+            "direction":  pos["direction"],
+            "score":      pos["score"],
+            "lots":       lots,
+            "pnl_usd":    pnl,
+            "pnl_pct":    pnl / max(self.balance - pnl, 1) * 100,
+            "reason":     reason,
+            "duration_h": (ts - pos["open_time"]).total_seconds() / 3600,
+        })
+
+        if pos in self.open_positions:
+            self.open_positions.remove(pos)
+
+
+# ──────────────────────────────────────────────────────────────────
+# 6. MÉTRICAS DE RENDIMIENTO
+# ──────────────────────────────────────────────────────────────────
+def compute_metrics(trades_df: pd.DataFrame,
+                    equity_curve: list[tuple],
+                    initial_balance: float = 100_000.0) -> dict:
+    """Calcula métricas completas de backtesting."""
+    if trades_df.empty:
+        return {"error": "Sin trades"}
+
+    equity_ts = pd.Series(
+        [e for _, e in equity_curve],
+        index=[t for t, _ in equity_curve]
+    )
+
+    pnl = trades_df["pnl_usd"]
+    total_trades = len(trades_df)
+    winners = pnl[pnl > 0]
+    losers  = pnl[pnl < 0]
+
+    win_rate = len(winners) / total_trades * 100 if total_trades > 0 else 0
+    avg_win  = winners.mean() if len(winners) > 0 else 0
+    avg_loss = losers.mean()  if len(losers)  > 0 else 0
+    profit_factor = (winners.sum() / abs(losers.sum())) if abs(losers.sum()) > 0 else np.inf
+
+    # Drawdown máximo
+    equity_arr  = equity_ts.values
+    running_max = np.maximum.accumulate(equity_arr)
+    drawdowns   = (equity_arr - running_max) / running_max * 100
+    max_dd      = abs(drawdowns.min())
+
+    # Retorno total
+    total_return = (equity_arr[-1] - initial_balance) / initial_balance * 100
+
+    # Retornos diarios para Sharpe
+    daily_equity = equity_ts.resample("1D").last().dropna()
+    daily_ret    = daily_equity.pct_change().dropna()
+    sharpe       = (daily_ret.mean() / daily_ret.std() * np.sqrt(252)
+                    if daily_ret.std() > 0 else 0)
+
+    # Estadísticas mensuales
+    if not trades_df.empty and "close_time" in trades_df.columns:
+        trades_df = trades_df.copy()
+        trades_df["month"] = pd.to_datetime(trades_df["close_time"]).dt.to_period("M")
+        monthly_pnl   = trades_df.groupby("month")["pnl_usd"].sum()
+        monthly_ret   = monthly_pnl / initial_balance * 100
+        monthly_count = trades_df.groupby("month").size()
+
+        worst_month_ret    = monthly_ret.min() if len(monthly_ret) > 0 else 0
+        avg_monthly_ret    = monthly_ret.mean() if len(monthly_ret) > 0 else 0
+        min_trades_month   = monthly_count.min() if len(monthly_count) > 0 else 0
+        avg_trades_month   = monthly_count.mean() if len(monthly_count) > 0 else 0
+        months_profitable  = (monthly_ret > 0).sum()
+        total_months       = len(monthly_ret)
+    else:
+        worst_month_ret  = avg_monthly_ret = 0
+        min_trades_month = avg_trades_month = 0
+        months_profitable = total_months = 0
+
+    # Daily max loss
+    if not trades_df.empty and "close_time" in trades_df.columns:
+        trades_df["day"] = pd.to_datetime(trades_df["close_time"]).dt.date
+        daily_pnl  = trades_df.groupby("day")["pnl_usd"].sum()
+        max_daily_loss = abs(daily_pnl.min()) / initial_balance * 100 if len(daily_pnl) > 0 else 0
+    else:
+        max_daily_loss = 0
+
+    # RR promedio
+    avg_rr = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+
+    return {
+        "total_trades":       total_trades,
+        "win_rate_pct":       round(win_rate, 2),
+        "profit_factor":      round(profit_factor, 3),
+        "sharpe_ratio":       round(sharpe, 3),
+        "max_drawdown_pct":   round(max_dd, 2),
+        "total_return_pct":   round(total_return, 2),
+        "avg_monthly_ret_pct": round(avg_monthly_ret, 2),
+        "worst_month_ret_pct": round(worst_month_ret, 2),
+        "min_trades_month":   int(min_trades_month),
+        "avg_trades_month":   round(avg_trades_month, 1),
+        "months_profitable":  int(months_profitable),
+        "total_months":       int(total_months),
+        "max_daily_loss_pct": round(max_daily_loss, 2),
+        "avg_win_usd":        round(avg_win, 2),
+        "avg_loss_usd":       round(avg_loss, 2),
+        "avg_rr":             round(avg_rr, 2),
+        "final_balance":      round(equity_arr[-1], 2),
+    }
+
+
+def check_objectives(metrics: dict, obj: dict = OBJECTIVES) -> dict:
+    """Verifica si los métricas cumplen los objetivos."""
+    results = {}
+    results["sharpe_ok"]     = metrics.get("sharpe_ratio", 0)       >= obj["min_sharpe"]
+    results["drawdown_ok"]   = metrics.get("max_drawdown_pct", 99)   <= obj["max_drawdown"]
+    results["daily_loss_ok"] = metrics.get("max_daily_loss_pct", 99) <= obj["max_daily_loss"]
+    results["trades_ok"]     = metrics.get("min_trades_month", 0)    >= obj["min_trades_month"]
+    results["monthly_ok"]    = metrics.get("worst_month_ret_pct", -99) >= obj["min_monthly_return"]
+    results["all_pass"]      = all(results.values())
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────
+# 7. OPTIMIZADOR DE PARÁMETROS (Iteración 2)
+# ──────────────────────────────────────────────────────────────────
+def optimize_params(df_with_indicators: pd.DataFrame,
+                    base_params: dict,
+                    initial_balance: float = 100_000.0,
+                    is_intraday: bool = True) -> dict:
+    """
+    Grid search sobre parámetros clave para maximizar Sharpe
+    manteniendo todos los objetivos.
+    """
+    print("\n  Optimizando parámetros (Iteración 2)...")
+
+    search_space = {
+        "min_score":        [4, 5, 6],
+        "sl_atr_mult":      [1.5, 1.8, 2.2],
+        "cmf_threshold":    [0.03, 0.05, 0.08],
+        "tp1_ratio":        [1.8, 2.0, 2.5],
+        "tp2_ratio":        [3.5, 4.0, 5.0],
+        "tp3_ratio":        [5.5, 6.5, 8.0],
+        "obv_ma_period":    [14, 20, 30],
+        "cmf_period":       [14, 20, 26],
+        "vroc_period":      [10, 14, 20],
+    }
+
+    best_score = -np.inf
+    best_params = base_params.copy()
+    n_trials = 0
+    max_trials = 40   # Limitar tiempo — indicadores ya calculados
+
+    np.random.seed(42)
+
+    # Random search eficiente (indicadores ya pre-calculados)
+    keys = list(search_space.keys())
+    for trial_num in range(max_trials):
+        trial_params = base_params.copy()
+        for k in keys:
+            trial_params[k] = np.random.choice(search_space[k])
+
+        # Validar que tp1 < tp2 < tp3
+        if not (trial_params["tp1_ratio"] < trial_params["tp2_ratio"] < trial_params["tp3_ratio"]):
+            continue
+
+        try:
+            bt = GoldBacktester(df_with_indicators, trial_params,
+                                initial_balance, is_intraday)
+            trades = bt.run(verbose=False)
+            if trades.empty: continue
+
+            m = compute_metrics(trades, bt.equity_curve, initial_balance)
+            obj_check = check_objectives(m)
+
+            # Score compuesto: prioriza Sharpe + penaliza fallos de objetivos
+            composite = (
+                m["sharpe_ratio"] * 1.0
+                + m["avg_monthly_ret_pct"] * 0.3
+                - m["max_drawdown_pct"] * 0.1
+                - (0 if obj_check["all_pass"] else 5.0)
+            )
+
+            if composite > best_score:
+                best_score  = composite
+                best_params = trial_params.copy()
+                n_trials += 1
+                print(f"    Mejor trial {n_trials}/{trial_num+1}: Sharpe={m['sharpe_ratio']:.3f} "
+                      f"DD={m['max_drawdown_pct']:.1f}% "
+                      f"AllPass={obj_check['all_pass']}")
+        except Exception:
+            continue
+
+    return best_params
+
+
+# ──────────────────────────────────────────────────────────────────
+# 8. RUNNER PRINCIPAL — 3 ITERACIONES
+# ──────────────────────────────────────────────────────────────────
+def run_backtest_iteration(df_raw: pd.DataFrame,
+                           params: dict,
+                           version: str,
+                           tf_label: str,
+                           is_intraday: bool = True,
+                           initial_balance: float = 100_000.0) -> dict:
+    """Ejecuta una iteración completa de backtesting."""
+    print(f"\n  [{version}] TF={tf_label} — Calculando indicadores...")
+
+    try:
+        df = VolumeIndicators.add_all(df_raw.copy(), params)
+        bt = GoldBacktester(df, params, initial_balance, is_intraday)
+        trades = bt.run(verbose=True)
+
+        if trades.empty:
+            print(f"  [{version}] Sin trades generados")
+            return {"version": version, "tf": tf_label, "trades": 0}
+
+        metrics  = compute_metrics(trades, bt.equity_curve, initial_balance)
+        obj_pass = check_objectives(metrics)
+
+        result = {
+            "version": version,
+            "tf":      tf_label,
+            **metrics,
+            **{f"obj_{k}": v for k, v in obj_pass.items()},
+            "params_min_score": params["min_score"],
+            "params_sl_mult":   params["sl_atr_mult"],
+            "params_cmf_thr":   params["cmf_threshold"],
+        }
+
+        print(f"  [{version}] TF={tf_label} | "
+              f"Trades={metrics['total_trades']} | "
+              f"WinR={metrics['win_rate_pct']:.1f}% | "
+              f"Sharpe={metrics['sharpe_ratio']:.3f} | "
+              f"MaxDD={metrics['max_drawdown_pct']:.1f}% | "
+              f"TotalRet={metrics['total_return_pct']:.1f}% | "
+              f"AllPass={obj_pass['all_pass']}")
+
+        return result, trades, bt.equity_curve
+
+    except Exception as e:
+        print(f"  ERROR en {version} {tf_label}: {e}")
+        return {"version": version, "tf": tf_label, "error": str(e)}, pd.DataFrame(), []
+
+
+def print_summary_table(results: list[dict]):
+    """Imprime tabla resumen de resultados."""
+    print("\n" + "="*110)
+    print("  RESUMEN COMPLETO — GOLD VOLUME FUSION ELITE")
+    print("="*110)
+    header = (f"{'Ver':>4} {'TF':>6} {'Trades':>7} {'WinR%':>7} "
+              f"{'Sharpe':>8} {'MaxDD%':>8} {'TotRet%':>9} "
+              f"{'AvgMon%':>8} {'WorMon%':>8} "
+              f"{'MinTrd/M':>9} {'DlyLoss%':>9} {'PASS':>5}")
+    print(header)
+    print("-"*110)
+    for r in results:
+        if "error" in r or r.get("total_trades", 0) == 0:
+            print(f"  {r.get('version','?'):>3} {r.get('tf','?'):>6}  ERROR/NO TRADES")
+            continue
+        passed = "YES" if r.get("obj_all_pass") else "NO "
+        print(
+            f"  {r['version']:>3} {r['tf']:>6} "
+            f"{r.get('total_trades',0):>7} "
+            f"{r.get('win_rate_pct',0):>7.1f} "
+            f"{r.get('sharpe_ratio',0):>8.3f} "
+            f"{r.get('max_drawdown_pct',0):>8.2f} "
+            f"{r.get('total_return_pct',0):>9.1f} "
+            f"{r.get('avg_monthly_ret_pct',0):>8.2f} "
+            f"{r.get('worst_month_ret_pct',0):>8.2f} "
+            f"{r.get('min_trades_month',0):>9} "
+            f"{r.get('max_daily_loss_pct',0):>9.2f} "
+            f"{passed:>5}"
+        )
+    print("="*110)
+
+
+def main():
+    """Función principal — ejecuta 3 iteraciones de backtesting."""
+    print("\n" + "█"*70)
+    print("  GOLD VOLUME FUSION ELITE — BACKTESTING ENGINE")
+    print("  3 Iteraciones | 10 años | XAUUSD (GC=F COMEX)")
+    print("  TFs: 15m, 30m, 1h, 2h, 3h, 4h")
+    print("█"*70 + "\n")
+
+    os.makedirs("results", exist_ok=True)
+
+    # ── DESCARGA DE DATOS ──────────────────────────────────────────
+    print("PASO 1: Descargando datos XAUUSD (GC=F COMEX)...")
+
+    # Datos diarios para 10 años (volumen real COMEX)
+    df_daily = download_data("GC=F", "2015-01-01", "2025-01-01", "1d")
+
+    # Datos horarios (máximo disponible ~730 días en yfinance)
+    print("\nDescargando datos horarios (1h)...")
+    try:
+        df_1h = download_data("GC=F", "2022-01-01", "2025-01-01", "60m")
+        has_intraday = True
+    except Exception as e:
+        print(f"  WARNING: No hay datos intradiarios disponibles: {e}")
+        print("  Usando datos diarios para todos los timeframes")
+        df_1h = df_daily.copy()
+        has_intraday = False
+
+    # ── PREPARAR TIMEFRAMES ────────────────────────────────────────
+    print("\nPASO 2: Preparando timeframes...")
+
+    timeframes = {
+        "1D":    (df_daily.copy(), False),   # 10 años completos
+    }
+
+    if has_intraday and len(df_1h) > 500:
+        # Remuestrear desde 1h
+        for tf in ["2h", "3h", "4h"]:
+            try:
+                df_tf = resample_data(df_1h, tf)
+                timeframes[tf] = (df_tf, True)
+                print(f"  {tf}: {len(df_tf)} barras")
+            except Exception as e:
+                print(f"  WARNING {tf}: {e}")
+
+        # Para 15m y 30m, intentar descargar
+        for tf_str, yf_int in [("30m", "30m"), ("15m", "15m")]:
+            try:
+                df_tf = download_data("GC=F", "2023-06-01", "2025-01-01", yf_int)
+                if len(df_tf) > 200:
+                    timeframes[tf_str] = (df_tf, True)
+                    print(f"  {tf_str}: {len(df_tf)} barras")
+            except Exception as e:
+                print(f"  WARNING {tf_str}: {e}")
+
+        timeframes["1h"] = (df_1h.copy(), True)
+        print(f"  1h: {len(df_1h)} barras")
+
+    all_results = []
+
+    # ══════════════════════════════════════════════════════════════
+    # ITERACIÓN 1 — Parámetros base
+    # ══════════════════════════════════════════════════════════════
+    print("\n" + "▓"*60)
+    print("  ITERACIÓN 1 — Parámetros Base")
+    print("▓"*60)
+
+    params_v1 = PARAMS_V1.copy()
+
+    iter1_results = []
+    iter1_trades  = {}
+    iter1_equity  = {}
+
+    for tf_label, (df_tf, is_intra) in timeframes.items():
+        r, trades, equity = run_backtest_iteration(
+            df_tf, params_v1, "V1", tf_label, is_intra
+        )
+        if isinstance(r, dict):
+            all_results.append(r)
+            iter1_results.append(r)
+        if not trades.empty:
+            iter1_trades[tf_label] = trades
+            iter1_equity[tf_label] = equity
+
+    # ══════════════════════════════════════════════════════════════
+    # ITERACIÓN 2 — Optimización de parámetros
+    # ══════════════════════════════════════════════════════════════
+    print("\n" + "▓"*60)
+    print("  ITERACIÓN 2 — Optimización de Parámetros")
+    print("▓"*60)
+
+    # Usar el TF más largo para optimizar (daily tiene más barras)
+    primary_tf = "1D"
+    df_opt, is_intra_opt = timeframes[primary_tf]
+
+    # Calcular indicadores una vez
+    df_opt_with_ind = VolumeIndicators.add_all(df_opt.copy(), params_v1)
+
+    params_v2 = optimize_params(df_opt_with_ind, params_v1,
+                                 is_intraday=is_intra_opt)
+
+    iter2_results = []
+    for tf_label, (df_tf, is_intra) in timeframes.items():
+        r, trades, equity = run_backtest_iteration(
+            df_tf, params_v2, "V2", tf_label, is_intra
+        )
+        if isinstance(r, dict):
+            all_results.append(r)
+            iter2_results.append(r)
+
+    # ══════════════════════════════════════════════════════════════
+    # ITERACIÓN 3 — Refinamiento fino
+    # ══════════════════════════════════════════════════════════════
+    print("\n" + "▓"*60)
+    print("  ITERACIÓN 3 — Refinamiento Fino (Parámetros Optimizados)")
+    print("▓"*60)
+
+    # Refinamiento basado en los resultados de V2
+    params_v3 = params_v2.copy()
+
+    # Análisis de los trades V2 para ajustar
+    v2_daily_res = next((r for r in iter2_results if r.get("tf") == "1D"), None)
+    if v2_daily_res:
+        sharpe_v2 = v2_daily_res.get("sharpe_ratio", 0)
+        dd_v2     = v2_daily_res.get("max_drawdown_pct", 99)
+        wr_v2     = v2_daily_res.get("win_rate_pct", 0)
+
+        print(f"\n  Análisis V2: Sharpe={sharpe_v2:.3f} MaxDD={dd_v2:.1f}% WinR={wr_v2:.1f}%")
+
+        if dd_v2 > 7.0:
+            print("  → MaxDD alto: reduciendo riesgo por trade y ajustando SL")
+            params_v3["risk_pct"]    = max(0.25, params_v2["risk_pct"] * 0.8)
+            params_v3["sl_atr_mult"] = min(2.5, params_v2["sl_atr_mult"] * 1.1)
+
+        if sharpe_v2 < 0.8:
+            print("  → Sharpe bajo: aumentando selectividad de señal")
+            params_v3["min_score"] = min(7, params_v2["min_score"] + 1)
+            params_v3["cmf_threshold"] = min(0.08, params_v2["cmf_threshold"] * 1.2)
+
+        if wr_v2 < 50:
+            print("  → Win rate bajo: mejorando filtros")
+            params_v3["min_score"] = min(7, params_v2["min_score"] + 1)
+
+        if v2_daily_res.get("min_trades_month", 0) < OBJECTIVES["min_trades_month"]:
+            print("  → Pocos trades/mes: reduciendo score mínimo")
+            params_v3["min_score"] = max(3, params_v2["min_score"] - 1)
+            params_v3["filter_weekdays"] = False  # Permitir más días
+
+    iter3_results = []
+    for tf_label, (df_tf, is_intra) in timeframes.items():
+        r, trades, equity = run_backtest_iteration(
+            df_tf, params_v3, "V3", tf_label, is_intra
+        )
+        if isinstance(r, dict):
+            all_results.append(r)
+            iter3_results.append(r)
+
+    # ══════════════════════════════════════════════════════════════
+    # RESUMEN FINAL
+    # ══════════════════════════════════════════════════════════════
+    print_summary_table(all_results)
+
+    # Comparar iteraciones en TF principal
+    print("\n" + "="*70)
+    print("  COMPARACIÓN DE ITERACIONES — TF: " + primary_tf)
+    print("="*70)
+    for version in ["V1", "V2", "V3"]:
+        r = next((x for x in all_results
+                  if x.get("version") == version and x.get("tf") == primary_tf), None)
+        if r and "sharpe_ratio" in r:
+            obj_pass = check_objectives(r)
+            status = "✓ PASA OBJETIVOS" if obj_pass["all_pass"] else "✗ FALLA OBJETIVOS"
+            print(f"\n  {version}: {status}")
+            print(f"    Sharpe={r['sharpe_ratio']:.3f}  MaxDD={r['max_drawdown_pct']:.1f}%  "
+                  f"TotalRet={r['total_return_pct']:.1f}%")
+            print(f"    WinRate={r['win_rate_pct']:.1f}%  AvgRR={r['avg_rr']:.2f}  "
+                  f"PF={r['profit_factor']:.2f}")
+            print(f"    MinTrades/Mes={r['min_trades_month']}  "
+                  f"WorstMon%={r['worst_month_ret_pct']:.1f}%  "
+                  f"MaxDailyLoss={r['max_daily_loss_pct']:.2f}%")
+
+    # ── GUARDAR RESULTADOS ─────────────────────────────────────────
+    results_df = pd.DataFrame([r for r in all_results if "sharpe_ratio" in r])
+    results_df.to_csv("results/backtest_volume_fusion_results.csv", index=False)
+
+    # Mejores parámetros de V3
+    best_params_out = {
+        "version": "V3_final",
+        "strategy": "Gold Volume Fusion Elite",
+        "generated": datetime.now().isoformat(),
+        "params": params_v3,
+        "objectives_target": OBJECTIVES,
+    }
+
+    # Métricas de V3 daily
+    v3_daily = next((r for r in iter3_results if r.get("tf") == primary_tf), {})
+    if "sharpe_ratio" in v3_daily:
+        best_params_out["metrics_v3_daily"] = {
+            k: v for k, v in v3_daily.items()
+            if k not in ["version", "tf"]
+        }
+        best_params_out["objectives_passed"] = check_objectives(v3_daily)
+
+    with open("results/best_params_volume_fusion.json", "w") as f:
+        json.dump(best_params_out, f, indent=2, default=str)
+
+    print(f"\n  Resultados guardados en results/")
+    print(f"  ├── backtest_volume_fusion_results.csv")
+    print(f"  └── best_params_volume_fusion.json")
+
+    print("\n  PARÁMETROS FINALES PARA EA MT5 (V3):")
+    print(f"    MinScore     = {params_v3['min_score']}")
+    print(f"    SL ATR Mult  = {params_v3['sl_atr_mult']}")
+    print(f"    CMF Threshold= {params_v3['cmf_threshold']}")
+    print(f"    OBV MA Period= {params_v3['obv_ma_period']}")
+    print(f"    CMF Period   = {params_v3['cmf_period']}")
+    print(f"    VROC Period  = {params_v3['vroc_period']}")
+    print(f"    TP1 / TP2 / TP3 = {params_v3['tp1_ratio']} / {params_v3['tp2_ratio']} / {params_v3['tp3_ratio']}")
+    print(f"    Risk % / trade = {params_v3['risk_pct']}")
+
+    return results_df, params_v3
+
+
+if __name__ == "__main__":
+    results_df, best_params = main()
