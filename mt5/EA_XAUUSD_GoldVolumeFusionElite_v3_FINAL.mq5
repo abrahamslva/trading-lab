@@ -196,7 +196,6 @@ double buf_vwap_sum_v[MAX_BARS];  // vol acumulado
 
 // Handles de indicadores MT5
 int    h_ATR;
-int    h_RSI;
 int    h_EMA20;
 int    h_EMA50;
 int    h_EMA200;
@@ -212,12 +211,11 @@ int OnInit()
 
    // Crear handles de indicadores nativos
    h_ATR   = iATR(_Symbol, PERIOD_CURRENT, ATR_Period);
-   h_RSI   = iRSI(_Symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);
    h_EMA20 = iMA(_Symbol, PERIOD_CURRENT, 20, 0, MODE_EMA, PRICE_CLOSE);
    h_EMA50 = iMA(_Symbol, PERIOD_CURRENT, 50, 0, MODE_EMA, PRICE_CLOSE);
    h_EMA200= iMA(_Symbol, PERIOD_CURRENT, 200, 0, MODE_EMA, PRICE_CLOSE);
 
-   if(h_ATR == INVALID_HANDLE || h_RSI == INVALID_HANDLE ||
+   if(h_ATR   == INVALID_HANDLE ||
       h_EMA20 == INVALID_HANDLE || h_EMA50 == INVALID_HANDLE ||
       h_EMA200 == INVALID_HANDLE)
    {
@@ -252,7 +250,6 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    IndicatorRelease(h_ATR);
-   IndicatorRelease(h_RSI);
    IndicatorRelease(h_EMA20);
    IndicatorRelease(h_EMA50);
    IndicatorRelease(h_EMA200);
@@ -310,18 +307,16 @@ void CalculateAllVolumeIndicators()
    if(bars < 50) return;
 
    // Obtener datos OHLCV
-   double high[], low[], close[], open[];
+   double high[], low[], close[];
    long   volume[];
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
    ArraySetAsSeries(close, true);
-   ArraySetAsSeries(open, true);
    ArraySetAsSeries(volume, true);
 
    CopyHigh(_Symbol, PERIOD_CURRENT, 0, bars, high);
    CopyLow(_Symbol, PERIOD_CURRENT, 0, bars, low);
    CopyClose(_Symbol, PERIOD_CURRENT, 0, bars, close);
-   CopyOpen(_Symbol, PERIOD_CURRENT, 0, bars, open);
    CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, bars, volume);
 
    // --- OBV ---
@@ -340,7 +335,7 @@ void CalculateAllVolumeIndicators()
    g_vi.cmf = CalculateCMF(high, low, close, volume, CMF_Period);
 
    // --- Chaikin Oscillator ---
-   g_vi.chaikin_osc = CalculateChaikinOscillator(bars);
+   g_vi.chaikin_osc = CalculateChaikinOscillator();
 
    // --- VPT ---
    CalculateVPT(close, volume, bars);
@@ -425,7 +420,7 @@ double CalculateEMA_Array(const double &arr[], int size, int period)
 //+------------------------------------------------------------------+
 //| CalculateChaikinOscillator = EMA_fast(AD) - EMA_slow(AD)          |
 //+------------------------------------------------------------------+
-double CalculateChaikinOscillator(int bars)
+double CalculateChaikinOscillator()
 {
    return g_vi.ad_ema_fast - g_vi.ad_ema_slow;
 }
@@ -906,7 +901,6 @@ double CalculateLotSize(double sl_pips, double risk_pct = -1.0)
    double risk_usd  = balance * risk_pct / 100.0;
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double point      = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
    if(tick_size == 0 || tick_value == 0 || sl_pips == 0) return 0.01;
 
