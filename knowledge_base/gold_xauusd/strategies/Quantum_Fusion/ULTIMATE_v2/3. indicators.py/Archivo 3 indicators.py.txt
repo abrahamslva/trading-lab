@@ -1,0 +1,750 @@
+indicators
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+INDICADORES TÉCNICOS AVANZADOS - SISTEMA COMPLETO CON TODAS LAS MEJORAS
+"""
+
+import numpy as np
+import pandas as pd
+import talib
+from sklearn.preprocessing import RobustScaler
+from typing import Tuple, Dict
+from datetime import datetime
+
+class AdvancedIndicators:
+    """Clase para cálculo de indicadores técnicos avanzados con todas las mejoras"""
+    
+    def __init__(self):
+        self.scaler = RobustScaler()
+        
+        # Parámetros adaptativos para indicadores
+        self.adaptive_params = {
+            'rsi_period': 14,
+            'macd_fast': 12,
+            'macd_slow': 26,
+            'bb_period': 20,
+            'atr_period': 14
+        }
+        
+        # Historial de rendimiento de indicadores
+        self.indicator_performance = {}
+        
+        # Parámetros para nuevos indicadores
+        self.microstructure_params = {
+            'order_flow_window': 10,
+            'volume_imbalance_threshold': 1.5,
+            'spread_threshold': 0.001
+        }
+        
+        self.cycle_params = {
+            'cycle_window': 50,
+            'dominance_threshold': 0.6
+        }
+    
+    # === INDICADORES ORIGINALES ===
+    
+    def quantum_momentum(self, close: pd.Series, volume: pd.Series, period: int = 14) -> np.ndarray:
+        """Indicador de momento cuántico avanzado"""
+        try:
+            returns = close.pct_change()
+            vol_weighted = returns * volume.rolling(period).mean()
+            momentum = vol_weighted.ewm(span=period).mean()
+            return self.scaler.fit_transform(momentum.values.reshape(-1, 1)).flatten()
+        except:
+            return np.zeros(len(close))
+    
+    def quantum_volatility(self, close: pd.Series, volume: pd.Series, period: int = 20) -> np.ndarray:
+        """Volatilidad cuántica con ajuste de volumen"""
+        try:
+            returns = close.pct_change()
+            vol = returns.rolling(period).std() * np.sqrt(period)
+            volume_factor = volume.rolling(period).mean() / volume.rolling(period*2).mean()
+            quantum_vol = vol * volume_factor
+            return self.scaler.fit_transform(quantum_vol.values.reshape(-1, 1)).flatten()
+        except:
+            return np.zeros(len(close))
+    
+    def market_microstructure(self, high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, period: int = 10) -> np.ndarray:
+        """Análisis de microestructura de mercado"""
+        try:
+            spread = (high - low) / close
+            volume_imbalance = volume.rolling(period).apply(lambda x: x.iloc[-1] / x.mean())
+            microstructure = spread * volume_imbalance
+            return self.scaler.fit_transform(microstructure.values.reshape(-1, 1)).flatten()
+        except:
+            return np.zeros(len(close))
+    
+    def liquidity_indicator(self, high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, period: int = 20) -> np.ndarray:
+        """Indicador de liquidez avanzado"""
+        try:
+            price_range = (high - low).rolling(period).mean()
+            volume_profile = volume.rolling(period).std()
+            liquidity = volume_profile / (price_range + 1e-10)
+            return self.scaler.fit_transform(liquidity.values.reshape(-1, 1)).flatten()
+        except:
+            return np.zeros(len(close))
+    
+    def whale_activity(self, close: pd.Series, volume: pd.Series, period: int = 30) -> np.ndarray:
+        """Detección de actividad de ballenas"""
+        try:
+            volume_sma = volume.rolling(period).mean()
+            volume_spike = volume / volume_sma
+            price_change = close.pct_change(period)
+            whale_signal = volume_spike * np.sign(price_change)
+            return self.scaler.fit_transform(whale_signal.values.reshape(-1, 1)).flatten()
+        except:
+            return np.zeros(len(close))
+    
+    def fractal_dimension(self, close: pd.Series, period: int = 20) -> pd.Series:
+        """Dimensión fractal para detectar caos en el mercado"""
+        try:
+            def hurst_exponent(ts):
+                if len(ts) < 100:
+                    return 0.5
+                lags = range(2, min(20, len(ts)//4))
+                tau = [np.std(np.subtract(ts[lag:], ts[:-lag])) for lag in lags]
+                poly = np.polyfit(np.log(lags), np.log(tau), 1)
+                return poly[0] * 2.0
+            
+            return close.rolling(period).apply(hurst_exponent)
+        except:
+            return pd.Series(0.5, index=close.index)
+    
+    def vwap(self, high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, period: int = 20) -> pd.Series:
+        """Volume Weighted Average Price"""
+        try:
+            typical_price = (high + low + close) / 3
+            vwap = (typical_price * volume).rolling(period).sum() / volume.rolling(period).sum()
+            return vwap
+        except:
+            return pd.Series(close.values, index=close.index)
+    
+    def ichimoku_cloud(self, high: pd.Series, low: pd.Series, close: pd.Series) -> Dict[str, pd.Series]:
+        """Nube Ichimoku para tendencias"""
+        try:
+            tenkan_sen = (high.rolling(9).max() + low.rolling(9).min()) / 2
+            kijun_sen = (high.rolling(26).max() + low.rolling(26).min()) / 2
+            senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
+            senkou_span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
+            chikou_span = close.shift(-26)
+            
+            return {
+                'tenkan_sen': tenkan_sen,
+                'kijun_sen': kijun_sen,
+                'senkou_span_a': senkou_span_a,
+                'senkou_span_b': senkou_span_b,
+                'chikou_span': chikou_span
+            }
+        except:
+            return {
+                'tenkan_sen': pd.Series(0, index=close.index),
+                'kijun_sen': pd.Series(0, index=close.index),
+                'senkou_span_a': pd.Series(0, index=close.index),
+                'senkou_span_b': pd.Series(0, index=close.index),
+                'chikou_span': pd.Series(0, index=close.index)
+            }
+    
+    def optimized_ema_crossover(self, df: pd.DataFrame, fast_period: int = 9, slow_period: int = 21) -> Tuple[pd.Series, pd.Series]:
+        """EMA crossover optimizado con filtro de tendencia"""
+        try:
+            df['ema_fast'] = talib.EMA(df['close'], timeperiod=fast_period)
+            df['ema_slow'] = talib.EMA(df['close'], timeperiod=slow_period)
+            
+            # Calcular pendiente de EMAs para confirmar tendencia
+            df['ema_fast_slope'] = df['ema_fast'].pct_change()
+            df['ema_slow_slope'] = df['ema_slow'].pct_change()
+            
+            # Señal solo cuando ambas EMAs tienen la misma dirección
+            buy_signal = (
+                (df['ema_fast'] > df['ema_slow']) &
+                (df['ema_fast_slope'] > 0) &
+                (df['ema_slow_slope'] > 0)
+            )
+            
+            sell_signal = (
+                (df['ema_fast'] < df['ema_slow']) &
+                (df['ema_fast_slope'] < 0) &
+                (df['ema_slow_slope'] < 0)
+            )
+            
+            return buy_signal, sell_signal
+        except:
+            return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+    
+    def enhanced_rsi(self, df: pd.DataFrame, period: int = 14) -> Tuple[pd.Series, float, float]:
+        """RSI mejorado con zonas dinámicas"""
+        try:
+            df['rsi'] = talib.RSI(df['close'], timeperiod=period)
+            
+            # Calcular volatilidad para ajustar zonas
+            volatility = df['close'].pct_change().rolling(20).std()
+            
+            # Ajustar zonas según volatilidad
+            if volatility.iloc[-1] > 0.05:  # Alta volatilidad
+                overbought = 80
+                oversold = 20
+            elif volatility.iloc[-1] < 0.02:  # Baja volatilidad
+                overbought = 70
+                oversold = 30
+            else:  # Volatilidad normal
+                overbought = 75
+                oversold = 25
+            
+            return df['rsi'], overbought, oversold
+        except:
+            return pd.Series(50, index=df.index), 70, 30
+    
+    def smart_bollinger_bands(self, df: pd.DataFrame, period: int = 20, std_dev: float = 2) -> Tuple[pd.Series, pd.Series]:
+        """Bollinger Bands con entrada inteligente"""
+        try:
+            df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
+                df['close'], timeperiod=period, nbdevup=std_dev, nbdevdn=std_dev
+            )
+            
+            # Calcular posición del precio dentro de las bandas
+            df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+            
+            # Señales solo cuando el precio rompe y cierra fuera de las bandas
+            buy_signal = (df['close'] < df['bb_lower']) & (df['bb_position'].shift(1) > 0.1)
+            sell_signal = (df['close'] > df['bb_upper']) & (df['bb_position'].shift(1) < 0.9)
+            
+            return buy_signal, sell_signal
+        except:
+            return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+    
+    def calculate_trend_strength(self, prices: pd.Series, period: int = 20) -> pd.Series:
+        """Calcular fuerza de tendencia"""
+        try:
+            returns = prices.pct_change()
+            slope = returns.rolling(period).apply(
+                lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0
+            )
+            volatility = returns.rolling(period).std()
+            trend_strength = slope / (volatility + 1e-10)
+            return trend_strength
+        except:
+            return pd.Series(0, index=prices.index)
+    
+    # === NUEVOS INDICADORES PARA MEJORAS ===
+    
+    def adaptive_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calcular indicadores con parámetros adaptativos"""
+        try:
+            close = df['close']
+            high = df['high']
+            low = df['low']
+            volume = df['volume']
+            
+            features = pd.DataFrame(index=df.index)
+            
+            # Indicadores técnicos con parámetros adaptativos
+            features['ema9'] = talib.EMA(close, timeperiod=9)
+            features['ema21'] = talib.EMA(close, timeperiod=21)
+            features['ema55'] = talib.EMA(close, timeperiod=55)
+            features['ema200'] = talib.EMA(close, timeperiod=200)
+            
+            # RSI adaptativo
+            features['rsi'] = talib.RSI(close, timeperiod=self.adaptive_params['rsi_period'])
+            
+            # MACD adaptativo
+            features['macd'], features['macdsignal'], features['macdhist'] = talib.MACD(
+                close,
+                fastperiod=self.adaptive_params['macd_fast'],
+                slowperiod=self.adaptive_params['macd_slow']
+            )
+            
+            # Bollinger Bands adaptativas
+            features['bb_upper'], features['bb_middle'], features['bb_lower'] = talib.BBANDS(
+                close,
+                timeperiod=self.adaptive_params['bb_period']
+            )
+            
+            # ATR adaptativo
+            features['atr'] = talib.ATR(
+                high, low, close,
+                timeperiod=self.adaptive_params['atr_period']
+            )
+            
+            # Resto de indicadores (fijos)
+            features['stoch_k'], features['stoch_d'] = talib.STOCH(high, low, close)
+            features['cci'] = talib.CCI(high, low, close, timeperiod=14)
+            features['williams_r'] = talib.WILLR(high, low, close, timeperiod=14)
+            features['mfi'] = talib.MFI(high, low, close, volume, timeperiod=14)
+            
+            # Indicadores cuánticos
+            features['quantum_momentum'] = self.quantum_momentum(close, volume)
+            features['quantum_volatility'] = self.quantum_volatility(close, volume)
+            features['market_microstructure'] = self.market_microstructure(high, low, close, volume)
+            features['liquidity'] = self.liquidity_indicator(high, low, close, volume)
+            features['whale_activity'] = self.whale_activity(close, volume)
+            features['fractal_dimension'] = self.fractal_dimension(close)
+            
+            # VWAP
+            features['vwap'] = self.vwap(high, low, close, volume)
+            
+            # Ichimoku
+            ichimoku = self.ichimoku_cloud(high, low, close)
+            features.update(ichimoku)
+            
+            # Características de precio
+            features['returns'] = close.pct_change()
+            features['log_returns'] = np.log(close / close.shift(1))
+            features['volatility'] = features['returns'].rolling(20).std()
+            features['skewness'] = features['returns'].rolling(30).skew()
+            features['kurtosis'] = features['returns'].rolling(30).kurt()
+            
+            # Características de volumen
+            features['volume_sma'] = talib.SMA(volume, timeperiod=20)
+            features['volume_ratio'] = volume / features['volume_sma']
+            
+            # Nuevos indicadores para microestructura
+            features.update(self.calculate_microstructure_features(df))
+            
+            # Nuevos indicadores para ciclos de mercado
+            features.update(self.calculate_cycle_features(df))
+            
+            return features
+            
+        except Exception as e:
+            print(f"Error en adaptive_indicators: {e}")
+            return pd.DataFrame(index=df.index)
+    
+    def calculate_microstructure_features(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
+        """Calcular características de microestructura de mercado"""
+        try:
+            close = df['close']
+            high = df['high']
+            low = df['low']
+            volume = df['volume']
+            
+            features = {}
+            
+            # Order flow imbalance
+            window = self.microstructure_params['order_flow_window']
+            features['order_flow_imbalance'] = self.calculate_order_flow_imbalance(close, volume, window)
+            
+            # Spread efectivo
+            features['effective_spread'] = self.calculate_effective_spread(high, low, close)
+            
+            # Volumen ponderado por precio
+            features['volume_weighted_price'] = self.calculate_volume_weighted_price(high, low, close, volume)
+            
+            # Profundidad del mercado (estimada)
+            features['market_depth'] = self.estimate_market_depth(high, low, volume)
+            
+            # Actividad de HFT (estimada)
+            features['hft_activity'] = self.estimate_hft_activity(close, volume)
+            
+            return features
+            
+        except Exception as e:
+            print(f"Error calculando características de microestructura: {e}")
+            return {}
+    
+    def calculate_order_flow_imbalance(self, close: pd.Series, volume: pd.Series, window: int) -> pd.Series:
+        """Calcular imbalance del flujo de órdenes"""
+        try:
+            # Estimar dirección de las órdenes basadas en cambios de precio y volumen
+            price_change = close.pct_change()
+            volume_change = volume.pct_change()
+            
+            # Imbalance estimado: volumen * dirección del cambio de precio
+            estimated_flow = volume_change * np.sign(price_change)
+            
+            # Calcular imbalance en ventana móvil
+            imbalance = estimated_flow.rolling(window).sum()
+            
+            # Normalizar
+            imbalance_normalized = imbalance / (volume.rolling(window).sum() + 1e-10)
+            
+            return imbalance_normalized
+            
+        except Exception as e:
+            print(f"Error calculando order flow imbalance: {e}")
+            return pd.Series(0, index=close.index)
+    
+    def calculate_effective_spread(self, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+        """Calcular spread efectivo"""
+        try:
+            # Spread estimado como (high - low) / close
+            spread = (high - low) / close
+            
+            # Suavizar con media móvil
+            smoothed_spread = spread.rolling(5).mean()
+            
+            return smoothed_spread
+            
+        except Exception as e:
+            print(f"Error calculando effective spread: {e}")
+            return pd.Series(0, index=close.index)
+    
+    def calculate_volume_weighted_price(self, high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+        """Calcular precio ponderado por volumen"""
+        try:
+            # Precio típico
+            typical_price = (high + low + close) / 3
+            
+            # Ponderar por volumen
+            vwap = (typical_price * volume).rolling(20).sum() / volume.rolling(20).sum()
+            
+            return vwap
+            
+        except Exception as e:
+            print(f"Error calculando volume weighted price: {e}")
+            return pd.Series(close.values, index=close.index)
+    
+    def estimate_market_depth(self, high: pd.Series, low: pd.Series, volume: pd.Series) -> pd.Series:
+        """Estimar profundidad del mercado"""
+        try:
+            # Profundidad estimada como volumen / rango de precios
+            price_range = high - low
+            depth = volume / (price_range + 1e-10)
+            
+            # Normalizar
+            normalized_depth = depth / depth.rolling(50).mean()
+            
+            return normalized_depth
+            
+        except Exception as e:
+            print(f"Error estimando market depth: {e}")
+            return pd.Series(1, index=high.index)
+    
+    def estimate_hft_activity(self, close: pd.Series, volume: pd.Series) -> pd.Series:
+        """Estimar actividad de High Frequency Trading"""
+        try:
+            # HFT estimado basado en:
+            # 1. Cambios rápidos de precio
+            # 2. Patrones de volumen irregulares
+            # 3. Microestructura
+            
+            price_change = close.pct_change()
+            volume_change = volume.pct_change()
+            
+            # Volatilidad intraday (estimada)
+            intraday_volatility = price_change.rolling(5).std()
+            
+            # Cambios de volumen abruptos
+            volume_spike = (volume_change.abs() > volume_change.rolling(20).std() * 2).astype(int)
+            
+            # Combinar señales
+            htf_signal = (intraday_volatility * volume_spike).rolling(10).mean()
+            
+            # Normalizar
+            htf_normalized = htf_signal / (htf_signal.rolling(50).mean() + 1e-10)
+            
+            return htf_normalized
+            
+        except Exception as e:
+            print(f"Error estimando HFT activity: {e}")
+            return pd.Series(0, index=close.index)
+    
+    def calculate_cycle_features(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
+        """Calcular características para detección de ciclos de mercado"""
+        try:
+            close = df['close']
+            high = df['high']
+            low = df['low']
+            volume = df['volume']
+            
+            features = {}
+            
+            # Dominancia de ciclo
+            features['cycle_dominance'] = self.calculate_cycle_dominance(close)
+            
+            # Fase del ciclo
+            features['cycle_phase'] = self.calculate_cycle_phase(close)
+            
+            # Fuerza del ciclo
+            features['cycle_strength'] = self.calculate_cycle_strength(close)
+            
+            # Duración del ciclo
+            features['cycle_duration'] = self.estimate_cycle_duration(close)
+            
+            # Divergencia de precio-volumen
+            features['price_volume_divergence'] = self.calculate_price_volume_divergence(close, volume)
+            
+            return features
+            
+        except Exception as e:
+            print(f"Error calculando características de ciclo: {e}")
+            return {}
+    
+    def calculate_cycle_dominance(self, close: pd.Series) -> pd.Series:
+        """Calcular dominancia del ciclo actual"""
+        try:
+            window = self.cycle_params['cycle_window']
+            
+            # Descomposición en componentes usando FFT
+            def get_dominance(series):
+                if len(series) < window:
+                    return 0.5
+                
+                # Aplicar FFT
+                fft = np.fft.fft(series.values)
+                freq = np.fft.fftfreq(len(series))
+                
+                # Encontrar frecuencia dominante
+                power = np.abs(fft) ** 2
+                dominant_freq_idx = np.argmax(power[1:len(power)//2]) + 1
+                dominant_freq = freq[dominant_freq_idx]
+                
+                # Convertir a dominancia (0-1)
+                dominance = min(1.0, abs(dominant_freq) * 10)
+                
+                return dominance
+            
+            return close.rolling(window).apply(get_dominance)
+            
+        except Exception as e:
+            print(f"Error calculando cycle dominance: {e}")
+            return pd.Series(0.5, index=close.index)
+    
+    def calculate_cycle_phase(self, close: pd.Series) -> pd.Series:
+        """Calcular fase del ciclo"""
+        try:
+            window = self.cycle_params['cycle_window']
+            
+            def get_phase(series):
+                if len(series) < window:
+                    return 0
+                
+                # Aplicar transformada de Hilbert para obtener fase
+                from scipy.signal import hilbert
+                
+                analytic_signal = hilbert(series.values - np.mean(series.values))
+                phase = np.angle(analytic_signal[-1])
+                
+                # Normalizar a 0-1
+                normalized_phase = (phase + np.pi) / (2 * np.pi)
+                
+                return normalized_phase
+            
+            return close.rolling(window).apply(get_phase)
+            
+        except Exception as e:
+            print(f"Error calculando cycle phase: {e}")
+            return pd.Series(0.5, index=close.index)
+    
+    def calculate_cycle_strength(self, close: pd.Series) -> pd.Series:
+        """Calcular fuerza del ciclo"""
+        try:
+            window = self.cycle_params['cycle_window']
+            
+            def get_strength(series):
+                if len(series) < window:
+                    return 0.5
+                
+                # Calcular periodicidad usando autocorrelación
+                autocorr = np.correlate(series.values, series.values, mode='full')
+                autocorr = autocorr[len(autocorr)//2:]
+                
+                # Encontrar picos en autocorrelación
+                from scipy.signal import find_peaks
+                
+                peaks, _ = find_peaks(autocorr[1:window//2])
+                
+                if len(peaks) > 0:
+                    # Fuerza basada en altura del pico más prominente
+                    strength = autocorr[peaks[0]+1] / autocorr[0]
+                    return min(1.0, strength)
+                else:
+                    return 0.5
+            
+            return close.rolling(window).apply(get_strength)
+            
+        except Exception as e:
+            print(f"Error calculando cycle strength: {e}")
+            return pd.Series(0.5, index=close.index)
+    
+    def estimate_cycle_duration(self, close: pd.Series) -> pd.Series:
+        """Estimar duración del ciclo"""
+        try:
+            window = self.cycle_params['cycle_window']
+            
+            def get_duration(series):
+                if len(series) < window:
+                    return 20  # Valor por defecto
+                
+                # Encontrar periodicidad usando FFT
+                fft = np.fft.fft(series.values)
+                freq = np.fft.fftfreq(len(series))
+                
+                # Encontrar frecuencia dominante (excluyendo DC)
+                power = np.abs(fft) ** 2
+                power[0] = 0  # Excluir componente DC
+                
+                if np.sum(power) > 0:
+                    # Frecuencia dominante
+                    dominant_freq_idx = np.argmax(power[1:len(power)//2]) + 1
+                    dominant_freq = freq[dominant_freq_idx]
+                    
+                    if dominant_freq != 0:
+                        # Convertir a período
+                        period = 1 / abs(dominant_freq)
+                        return min(100, max(5, period))  # Limitar entre 5 y 100
+                
+                return 20  # Valor por defecto
+            
+            return close.rolling(window).apply(get_duration)
+            
+        except Exception as e:
+            print(f"Error estimando cycle duration: {e}")
+            return pd.Series(20, index=close.index)
+    
+    def calculate_price_volume_divergence(self, close: pd.Series, volume: pd.Series) -> pd.Series:
+        """Calcular divergencia precio-volumen"""
+        try:
+            # Tendencia de precios
+            price_trend = close.pct_change().rolling(20).mean()
+            
+            # Tendencia de volumen
+            volume_trend = volume.pct_change().rolling(20).mean()
+            
+            # Divergencia: cuando las tendencias van en direcciones opuestas
+            divergence = price_trend * volume_trend
+            
+            # Normalizar a -1 a 1
+            divergence_normalized = np.tanh(divergence * 10)
+            
+            return divergence_normalized
+            
+        except Exception as e:
+            print(f"Error calculando price-volume divergence: {e}")
+            return pd.Series(0, index=close.index)
+    
+    # === MÉTODOS PARA ACTUALIZAR RENDIMIENTO ===
+    
+    def update_indicator_performance(self, symbol: str, signal_type: str, pnl: float):
+        """Actualizar rendimiento de indicadores con resultado real"""
+        try:
+            if symbol not in self.indicator_performance:
+                self.indicator_performance[symbol] = {
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'total_pnl': 0,
+                    'indicator_performance': {}
+                }
+            
+            # Actualizar estadísticas generales
+            self.indicator_performance[symbol]['total_trades'] += 1
+            if pnl > 0:
+                self.indicator_performance[symbol]['winning_trades'] += 1
+            self.indicator_performance[symbol]['total_pnl'] += pnl
+            
+            # Actualizar rendimiento de indicadores específicos
+            # Esto requeriría más contexto sobre qué indicadores se usaron
+            # Por ahora, actualizamos un registro genérico
+            if 'generic' not in self.indicator_performance[symbol]['indicator_performance']:
+                self.indicator_performance[symbol]['indicator_performance']['generic'] = {
+                    'uses': 0,
+                    'wins': 0,
+                    'total_pnl': 0
+                }
+            
+            self.indicator_performance[symbol]['indicator_performance']['generic']['uses'] += 1
+            if pnl > 0:
+                self.indicator_performance[symbol]['indicator_performance']['generic']['wins'] += 1
+            self.indicator_performance[symbol]['indicator_performance']['generic']['total_pnl'] += pnl
+            
+        except Exception as e:
+            print(f"Error actualizando rendimiento de indicadores: {e}")
+    
+    def get_best_performing_indicators(self, symbol: str, top_n: int = 5) -> List[Tuple[str, float]]:
+        """Obtener los indicadores con mejor rendimiento"""
+        try:
+            if symbol not in self.indicator_performance:
+                return []
+            
+            indicator_perf = self.indicator_performance[symbol]['indicator_performance']
+            
+            # Calcular win rate para cada indicador
+            win_rates = []
+            for indicator, data in indicator_perf.items():
+                if data['uses'] > 0:
+                    win_rate = data['wins'] / data['uses']
+                    avg_pnl = data['total_pnl'] / data['uses']
+                    
+                    # Puntuación combinada
+                    score = win_rate * 0.7 + (avg_pnl > 0) * 0.3
+                    win_rates.append((indicator, score))
+            
+            # Ordenar por puntuación y devolver top N
+            win_rates.sort(key=lambda x: x[1], reverse=True)
+            return win_rates[:top_n]
+            
+        except Exception as e:
+            print(f"Error obteniendo mejores indicadores: {e}")
+            return []
+    
+    def adapt_parameters(self, symbol: str):
+        """Adaptar parámetros de indicadores basándose en rendimiento"""
+        try:
+            best_indicators = self.get_best_performing_indicators(symbol)
+            
+            if not best_indicators:
+                return
+            
+            # Adaptar parámetros basados en los mejores indicadores
+            for indicator, score in best_indicators:
+                if 'rsi' in indicator and score > 0.6:
+                    # Si RSI funciona bien, intentar optimizar su período
+                    current_period = self.adaptive_params['rsi_period']
+                    
+                    # Pequeña adaptación basada en rendimiento
+                    if score > 0.7:
+                        # Si funciona muy bien, intentar período más largo
+                        self.adaptive_params['rsi_period'] = min(30, current_period + 1)
+                    elif score < 0.5:
+                        # Si no funciona bien, intentar período más corto
+                        self.adaptive_params['rsi_period'] = max(7, current_period - 1)
+                
+                elif 'macd' in indicator and score > 0.6:
+                    # Adaptar parámetros MACD
+                    if score > 0.7:
+                        self.adaptive_params['macd_fast'] = max(5, self.adaptive_params['macd_fast'] - 1)
+                        self.adaptive_params['macd_slow'] = max(15, self.adaptive_params['macd_slow'] - 1)
+                    elif score < 0.5:
+                        self.adaptive_params['macd_fast'] = min(20, self.adaptive_params['macd_fast'] + 1)
+                        self.adaptive_params['macd_slow'] = min(40, self.adaptive_params['macd_slow'] + 1)
+            
+        except Exception as e:
+            print(f"Error adaptando parámetros: {e}")
+    
+    def build_advanced_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Construir características avanzadas para el modelo"""
+        try:
+            # Usar el método adaptativo que incluye todo
+            features = self.adaptive_indicators(df)
+            
+            # Agregar características adicionales específicas para el modelo
+            if not features.empty:
+                # Características de interacción
+                features['price_volume_interaction'] = features['returns'] * features['volume_ratio']
+                features['volatility_momentum_interaction'] = features['volatility'] * features['quantum_momentum']
+                
+                # Características de retraso
+                for lag in [1, 2, 3]:
+                    features[f'returns_lag_{lag}'] = features['returns'].shift(lag)
+                    features[f'volume_ratio_lag_{lag}'] = features['volume_ratio'].shift(lag)
+                
+                # Características de tendencia
+                features['price_trend_5'] = features['close'].rolling(5).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0)
+                features['price_trend_10'] = features['close'].rolling(10).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0)
+                
+                # Características de estacionalidad
+                features['hour_of_day'] = features.index.hour
+                features['day_of_week'] = features.index.dayofweek
+                
+                # One-hot encoding para variables categóricas
+                hour_dummies = pd.get_dummies(features['hour_of_day'], prefix='hour')
+                day_dummies = pd.get_dummies(features['day_of_week'], prefix='day')
+                
+                features = pd.concat([features, hour_dummies, day_dummies], axis=1)
+            
+            return features
+            
+        except Exception as e:
+            print(f"Error construyendo características avanzadas: {e}")
+            return pd.DataFrame(index=df.index)

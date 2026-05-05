@@ -1,0 +1,46 @@
+5. Configuración Mejorada
+
+# Configuración de Quantum Fusion Pro
+
+# Símbolos de trading
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  - "BNB/USDT"
+
+# Configuración de APIs
+binance:
+  api_key: "tu_api_key"
+  api_secret: "tu_api_secret"
+
+twitter:
+  bearer_token: "tu_bearer_token"
+
+reddit:
+  client_id: "tu_client_id"
+  client_secret: "tu_client_secret"
+
+news:
+  api_key: "tu_api_key"
+
+telegram:
+  api_id: "tu_api_id"
+  api_hash: "tu_api_hash"
+  phone_number: "tu_numero_telefono"
+
+# Configuración del modelo
+model:
+  type: "ensemble"  # opciones: ensemble, xgboost, lightgbm, randomforest
+
+# Configuración de riesgo
+risk:
+  risk_per_trade: 0.01  # 1% del capital por operación
+  stop_loss_pct: 0.02   # 2%
+  take_profit_pct: 0.04 # 4%
+  max_positions: 2      # Máximo 2 posiciones simultáneas
+  max_daily_loss: 0.05  # 5% de pérdida diaria máxima
+
+# Configuración de trading
+trading:
+  interval: 300  # 5 minutos entre ciclos
+  paper_trading: false  # Cambiar a true para pruebas

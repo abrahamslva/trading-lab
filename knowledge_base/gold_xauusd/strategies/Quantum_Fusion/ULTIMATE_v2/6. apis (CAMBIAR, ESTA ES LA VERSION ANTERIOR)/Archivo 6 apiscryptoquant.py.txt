@@ -1,0 +1,234 @@
+Archivo 6: apis/cryptoquant.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CRYPTOQUANT API ANALYZER - PAQUETE ESENCIAL
+"""
+
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+class CryptoQuantAnalyzer:
+    """Analizador de datos de CryptoQuant API"""
+    
+    def __init__(self, api_key: str):
+        """Inicializar analizador de CryptoQuant"""
+        self.api_key = api_key
+        self.base_url = "https://api.cryptoquant.com/v1"
+    
+    def get_exchange_flow_data(self, symbol: str) -> Dict:
+        """Obtener datos de flujo de exchanges"""
+        try:
+            endpoints = {
+                'exchange_inflow': '/exchange-flows/inflow',
+                'exchange_outflow': '/exchange-flows/outflow',
+                'netflow': '/exchange-flows/netflow',
+                'stablecoin_ratio': '/onchain/stablecoin-ratio',
+                'funding_rate': '/derivatives/funding-rate'
+            }
+            
+            flow_data = {}
+            for key, endpoint in endpoints.items():
+                url = f"{self.base_url}{endpoint}"
+                params = {
+                    "symbol": symbol,
+                    "api_key": self.api_key,
+                    "window": "day"
+                }
+                
+                response = requests.get(url, params=params)
+                flow_data[key] = response.json()
+            
+            return flow_data
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de CryptoQuant: {e}")
+            return {}
+    
+    def generate_flow_signals(self, flow_data: Dict) -> Dict[str, float]:
+        """Generar señales basadas en flujo de exchanges"""
+        signals = {}
+        
+        # Netflow positivo (más entradas que salidas)
+        if 'netflow' in flow_data and flow_data['netflow']:
+            netflow = flow_data['netflow']
+            if netflow and 'data' in netflow and len(netflow['data']) > 0:
+                latest_netflow = netflow['data'][-1]['value']
+                
+                if latest_netflow > 1000000:  # >$1M netflow positivo
+                    signals['netflow'] = 0.4
+                elif latest_netflow < -1000000:  # >$1M netflow negativo
+                    signals['netflow'] = -0.4
+        
+        # Ratio de stablecoins
+        if 'stablecoin_ratio' in flow_data and flow_data['stablecoin_ratio']:
+            stablecoin = flow_data['stablecoin_ratio']
+            if stablecoin and 'data' in stablecoin and len(stablecoin['data']) > 0:
+                latest_ratio = stablecoin['data'][-1]['value']
+                
+                if latest_ratio > 0.15:  # Alto ratio de stablecoins
+                    signals['stablecoin_ratio'] = 0.3  # Potencial compra
+        
+        # Funding rate de futuros
+        if 'funding_rate' in flow_data and flow_data['funding_rate']:
+            funding = flow_data['funding_rate']
+            if funding and 'data' in funding and len(funding['data']) > 0:
+                latest_funding = funding['data'][-1]['rate']
+                
+                if latest_funding > 0.01:  # >1% funding rate
+                    signals['funding'] = -0.3  # Sobrecompra
+                elif latest_funding < -0.01:  # <-1% funding rate
+                    signals['funding'] = 0.3   # Sobreventa
+        
+        return signals
+    
+    def get_market_capitalization_data(self, symbol: str) -> Dict:
+        """Obtener datos de capitalización de mercado"""
+        try:
+            endpoints = {
+                'market_cap_dominance': '/market-cap/dominance',
+                'realized_volatility': '/market/realized-volatility',
+                'price_drawdown': '/market/price-drawdown'
+            }
+            
+            market_data = {}
+            for key, endpoint in endpoints.items():
+                url = f"{self.base_url}{endpoint}"
+                params = {
+                    "symbol": symbol,
+                    "api_key": self.api_key,
+                    "window": "day"
+                }
+                
+                response = requests.get(url, params=params)
+                market_data[key] = response.json()
+            
+            return market_data
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de capitalización: {e}")
+            return {}
+    
+    def calculate_market_signals(self, market_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en métricas de mercado"""
+        signals = {}
+        
+        # Dominancia de mercado
+        if 'market_cap_dominance' in market_data and market_data['market_cap_dominance']:
+            dominance = market_data['market_cap_dominance']
+            if dominance and 'data' in dominance and len(dominance['data']) > 0:
+                latest_dominance = dominance['data'][-1]['value']
+                
+                if latest_dominance > 0.6:  # Alta dominancia
+                    signals['high_dominance'] = 0.3
+        
+        # Volatilidad realizada
+        if 'realized_volatility' in market_data and market_data['realized_volatility']:
+            volatility = market_data['realized_volatility']
+            if volatility and 'data' in volatility and len(volatility['data']) > 0:
+                latest_volatility = volatility['data'][-1]['value']
+                
+                if latest_volatility > 0.08:  # Alta volatilidad
+                    signals['high_volatility'] = -0.3
+                elif latest_volatility < 0.03:  # Baja volatilidad
+                    signals['low_volatility'] = 0.3
+        
+        # Drawdown de precio
+        if 'price_drawdown' in market_data and market_data['price_drawdown']:
+            drawdown = market_data['price_drawdown']
+            if drawdown and 'data' in drawdown and len(drawdown['data']) > 0:
+                latest_drawdown = drawdown['data'][-1]['value']
+                
+                if latest_drawdown > 0.15:  # Drawdown significativo
+                    signals['deep_drawdown'] = -0.4
+                elif latest_drawdown < 0.02:  # Poco drawdown
+                    signals['shallow_drawdown'] = 0.3
+        
+        return signals
+    
+    def get_on_chain_activity_metrics(self, symbol: str) -> Dict:
+        """Obtener métricas de actividad on-chain"""
+        try:
+            endpoints = {
+                'miner_positions': '/onchain/miner-positions',
+                'exchange_positions': '/onchain/exchange-positions',
+                'transaction_volume': '/onchain/transaction-volume',
+                'active_deposits': '/onchain/active-deposits',
+                'active_withdrawals': '/onchain/active-withdrawals'
+            }
+            
+            onchain_data = {}
+            for key, endpoint in endpoints.items():
+                url = f"{self.base_url}{endpoint}"
+                params = {
+                    "symbol": symbol,
+                    "api_key": self.api_key,
+                    "window": "day"
+                }
+                
+                response = requests.get(url, params=params)
+                onchain_data[key] = response.json()
+            
+            return onchain_data
+            
+        except Exception as e:
+            print(f"Error obteniendo métricas on-chain: {e}")
+            return {}
+    
+    def calculate_onchain_signals(self, onchain_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en métricas on-chain"""
+        signals = {}
+        
+        # Posiciones de mineros
+        if 'miner_positions' in onchain_data and onchain_data['miner_positions']:
+            miner_data = onchain_data['miner_positions']
+            if miner_data and 'data' in miner_data and len(miner_data['data']) > 0:
+                latest_miner = miner_data['data'][-1]['value']
+                
+                if latest_miner > 0:  # Mineros acumulando
+                    signals['miner_accumulation'] = 0.3
+                elif latest_miner < 0:  # Mineros vendiendo
+                    signals['miner_distribution'] = -0.3
+        
+        # Posiciones de exchanges
+        if 'exchange_positions' in onchain_data and onchain_data['exchange_positions']:
+            exchange_data = onchain_data['exchange_positions']
+            if exchange_data and 'data' in exchange_data and len(exchange_data['data']) > 0:
+                latest_exchange = exchange_data['data'][-1]['value']
+                
+                if latest_exchange > 0:  # Exchanges acumulando
+                    signals['exchange_accumulation'] = 0.2
+                elif latest_exchange < 0:  # Exchanges distribuyendo
+                    signals['exchange_distribution'] = -0.2
+        
+        # Volumen de transacciones
+        if 'transaction_volume' in onchain_data and onchain_data['transaction_volume']:
+            tx_volume = onchain_data['transaction_volume']
+            if tx_volume and 'data' in tx_volume and len(tx_volume['data']) > 0:
+                latest_volume = tx_volume['data'][-1]['value']
+                volume_change = tx_volume['data'][-1]['change']
+                
+                if latest_volume > 1000000 and volume_change > 0:  # Alto volumen creciente
+                    signals['high_volume'] = 0.3
+        
+        # Depósitos y retiros
+        if 'active_deposits' in onchain_data and 'active_withdrawals' in onchain_data:
+            deposits = onchain_data['active_deposits']
+            withdrawals = onchain_data['active_withdrawals']
+            
+            if deposits and withdrawals and 'data' in deposits and 'data' in withdrawals and len(deposits['data']) > 0 and len(withdrawals['data']) > 0:
+                latest_deposits = deposits['data'][-1]['value']
+                latest_withdrawals = withdrawals['data'][-1]['value']
+                
+                deposit_withdrawal_ratio = latest_deposits / (latest_withdrawals + 1e-10)
+                
+                if deposit_withdrawal_ratio > 1.5:  # Más depósitos que retiros
+                    signals['net_inflow'] = 0.3
+                elif deposit_withdrawal_ratio < 0.7:  # Más retiros que depósitos
+                    signals['net_outflow'] = -0.3
+        
+        return signals

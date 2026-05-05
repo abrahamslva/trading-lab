@@ -1,0 +1,146 @@
+3. Feature Engineering Avanzado con Análisis Temporal
+
+class AdvancedFeatureEngineer:
+    def __init__(self):
+        self.feature_importance_history = []
+    
+    def create_temporal_features(self, df):
+        """Crear características temporales avanzadas"""
+        features = pd.DataFrame(index=df.index)
+        
+        # Características de tiempo cíclico
+        features['hour_sin'] = np.sin(2 * np.pi * df.index.hour / 24)
+        features['hour_cos'] = np.cos(2 * np.pi * df.index.hour / 24)
+        features['day_sin'] = np.sin(2 * np.pi * df.index.dayofweek / 7)
+        features['day_cos'] = np.cos(2 * np.pi * df.index.dayofweek / 7)
+        features['month_sin'] = np.sin(2 * np.pi * df.index.month / 12)
+        features['month_cos'] = np.cos(2 * np.pi * df.index.month / 12)
+        
+        # Características de sesión de trading
+        features['asian_session'] = ((df.index.hour >= 0) & (df.index.hour < 8)).astype(int)
+        features['european_session'] = ((df.index.hour >= 8) & (df.index.hour < 16)).astype(int)
+        features['us_session'] = ((df.index.hour >= 16) & (df.index.hour < 24)).astype(int)
+        
+        # Características de volatilidad condicional
+        features['volatility_regime'] = self.classify_volatility_regime(df['close'])
+        
+        # Características de tendencia multi-escala
+        for period in [5, 10, 20, 50]:
+            features[f'trend_{period}'] = self.calculate_trend_strength(df['close'], period)
+            features[f'momentum_{period}'] = df['close'].pct_change(period)
+        
+        return features
+    
+    def create_interaction_features(self, df):
+        """Crear características de interacción inteligentes"""
+        features = pd.DataFrame(index=df.index)
+        
+        # Interacciones entre indicadores técnicos
+        features['rsi_macd_interaction'] = df['rsi'] * df['macd']
+        features['bb_width_rsi'] = ((df['bb_upper'] - df['bb_lower']) / df['bb_middle']) * df['rsi']
+        features['volume_price_acceleration'] = df['volume_ratio'] * df['returns'].diff()
+        
+        # Interacciones entre timeframe
+        features['multi_timeframe_trend'] = self.calculate_multi_timeframe_alignment(df)
+        
+        # Interacciones no lineales
+        features['price_volume_nonlinear'] = np.log1p(df['close']) * np.log1p(df['volume'])
+        features['volatility_clustering'] = df['volatility'] ** 2
+        
+        return features
+    
+    def create_statistical_features(self, df):
+        """Crear características estadísticas avanzadas"""
+        features = pd.DataFrame(index=df.index)
+        
+        # Momentos estadísticos rolling
+        for window in [10, 20, 50]:
+            returns = df['close'].pct_change()
+            
+            features[f'skewness_{window}'] = returns.rolling(window).skew()
+            features[f'kurtosis_{window}'] = returns.rolling(window).kurt()
+            features[f'jarque_bera_{window}'] = self.jarque_bera_test(returns.rolling(window))
+            
+            # Quantiles rolling
+            features[f'quantile_25_{window}'] = returns.rolling(window).quantile(0.25)
+            features[f'quantile_75_{window}'] = returns.rolling(window).quantile(0.75)
+            features[f'iqr_{window}'] = features[f'quantile_75_{window}'] - features[f'quantile_25_{window}']
+        
+        # Características de dependencia temporal
+        features['autocorrelation_lag1'] = df['returns'].rolling(20).apply(lambda x: x.autocorr(lag=1))
+        features['autocorrelation_lag5'] = df['returns'].rolling(50).apply(lambda x: x.autocorr(lag=5))
+        
+        # Características de memoria larga
+        features['hurst_exponent'] = df['close'].rolling(100).apply(self.calculate_hurst_exponent)
+        
+        return features
+    
+    def classify_volatility_regime(self, prices, window=20):
+        """Clasificar régimen de volatilidad"""
+        volatility = prices.pct_change().rolling(window).std()
+        
+        # Clasificación basada en percentiles históricos
+        low_vol_threshold = volatility.quantile(0.33)
+        high_vol_threshold = volatility.quantile(0.67)
+        
+        regime = pd.Series(0, index=prices.index)  # 0: normal
+        regime[volatility < low_vol_threshold] = -1  # -1: baja volatilidad
+        regime[volatility > high_vol_threshold] = 1   # 1: alta volatilidad
+        
+        return regime
+    
+    def calculate_trend_strength(self, prices, period):
+        """Calcular fuerza de tendencia usando DFA"""
+        returns = prices.pct_change()
+        
+        # Calcular pendiente usando regresión lineal rolling
+        slope = returns.rolling(period).apply(
+            lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0
+        )
+        
+        # Normalizar por volatilidad
+        volatility = returns.rolling(period).std()
+        trend_strength = slope / (volatility + 1e-10)
+        
+        return trend_strength
+    
+    def calculate_multi_timeframe_alignment(self, df):
+        """Calcular alineación de tendencia en múltiples timeframes"""
+        # Simplificado para ejemplo
+        short_trend = np.where(df['close'] > df['close'].rolling(5).mean(), 1, -1)
+        medium_trend = np.where(df['close'] > df['close'].rolling(20).mean(), 1, -1)
+        long_trend = np.where(df['close'] > df['close'].rolling(50).mean(), 1, -1)
+        
+        # Alineación cuando todas las tendencias coinciden
+        alignment = (short_trend == medium_trend) & (medium_trend == long_trend)
+        
+        return alignment.astype(int)
+    
+    def jarque_bera_test(self, returns_series):
+        """Test de Jarque-Bera para normalidad"""
+        from scipy import stats
+        
+        if len(returns_series.dropna()) < 3:
+            return 0
+        
+        try:
+            jb_stat, p_value = stats.jarque_bera(returns_series.dropna())
+            return jb_stat
+        except:
+            return 0
+    
+    def calculate_hurst_exponent(self, prices):
+        """Calcular exponente de Hurst para detectar memoria larga"""
+        if len(prices) < 100:
+            return 0.5
+        
+        try:
+            # Método R/S simplificado
+            lags = range(2, 20)
+            tau = [np.std(np.subtract(prices[lag:], prices[:-lag])) for lag in lags]
+            
+            # Calcular pendiente en log-log plot
+            poly = np.polyfit(np.log(lags), np.log(tau), 1)
+            return poly[0] * 2.0
+        except:
+            return 0.5

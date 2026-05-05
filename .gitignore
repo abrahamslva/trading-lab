@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.egg-info/
+
+# Data files grandes
+data/lean-data/
+*.zip
+*.whl
+*.exe
+
+# Word temp files
+~$*
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1203 @@
+Quantum Fusion Optimized - Código Completo
+
+# ==============================================================================
+# QUANTUM FUSION OPTIMIZED - VERSIÓN COMPLETA
+# ==============================================================================
+
+import numpy as np
+import pandas as pd
+import talib
+import ccxt
+import tweepy
+import praw
+import requests
+import logging
+import yaml
+import time
+import os
+import joblib
+from datetime import datetime, timedelta
+from sklearn.preprocessing import RobustScaler
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.linear_model import LogisticRegression
+from textblob import TextBlob
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==============================================================================
+# CLASE DE INDICADORES OPTIMIZADOS
+# ==============================================================================
+
+class QuantumIndicatorsOptimized:
+    def __init__(self):
+        self.scaler = RobustScaler()
+    
+    def quantum_momentum(self, close, volume, period=14):
+        """Indicador de momento cuántico optimizado"""
+        returns = close.pct_change()
+        vol_weighted = returns * volume.rolling(period).mean()
+        momentum = vol_weighted.ewm(span=period).mean()
+        return self.scaler.fit_transform(momentum.values.reshape(-1, 1)).flatten()
+    
+    def quantum_volatility(self, close, volume, period=20):
+        """Volatilidad cuántica con ajuste de volumen"""
+        returns = close.pct_change()
+        vol = returns.rolling(period).std() * np.sqrt(period)
+        volume_factor = volume.rolling(period).mean() / volume.rolling(period*2).mean()
+        quantum_vol = vol * volume_factor
+        return self.scaler.fit_transform(quantum_vol.values.reshape(-1, 1)).flatten()
+    
+    def quantum_pressure(self, high, low, close, volume):
+        """Presión de mercado cuántica optimizada"""
+        buyer_pressure = ((close - low) / (high - low + 1e-10)) * volume
+        seller_pressure = ((high - close) / (high - low + 1e-10)) * volume
+        net_pressure = (buyer_pressure - seller_pressure).rolling(10).mean()
+        return self.scaler.fit_transform(net_pressure.values.reshape(-1, 1)).flatten()
+    
+    def market_microstructure(self, high, low, close, volume, period=10):
+        """Análisis de microestructura de mercado"""
+        spread = (high - low) / close
+        volume_imbalance = volume.rolling(period).apply(lambda x: x.iloc[-1] / x.mean())
+        microstructure = spread * volume_imbalance
+        return self.scaler.fit_transform(microstructure.values.reshape(-1, 1)).flatten()
+    
+    def liquidity_indicator(self, high, low, close, volume, period=20):
+        """Indicador de liquidez optimizado"""
+        price_range = (high - low).rolling(period).mean()
+        volume_profile = volume.rolling(period).std()
+        liquidity = volume_profile / (price_range + 1e-10)
+        return self.scaler.fit_transform(liquidity.values.reshape(-1, 1)).flatten()
+    
+    def whale_activity(self, close, volume, period=30):
+        """Detección de actividad de ballenas"""
+        volume_sma = volume.rolling(period).mean()
+        volume_spike = volume / volume_sma
+        price_change = close.pct_change(period)
+        whale_signal = volume_spike * np.sign(price_change)
+        return self.scaler.fit_transform(whale_signal.values.reshape(-1, 1)).flatten()
+    
+    def optimized_ema_crossover(self, df, fast_period=9, slow_period=21):
+        """EMA crossover optimizado con filtro de tendencia"""
+        df['ema_fast'] = talib.EMA(df['close'], fast_period)
+        df['ema_slow'] = talib.EMA(df['close'], slow_period)
+        
+        # Calcular pendiente de EMAs para confirmar tendencia
+        df['ema_fast_slope'] = df['ema_fast'].pct_change()
+        df['ema_slow_slope'] = df['ema_slow'].pct_change()
+        
+        # Señal solo cuando ambas EMAs tienen la misma dirección
+        buy_signal = (
+            (df['ema_fast'] > df['ema_slow']) & 
+            (df['ema_fast_slope'] > 0) & 
+            (df['ema_slow_slope'] > 0)
+        )
+        
+        sell_signal = (
+            (df['ema_fast'] < df['ema_slow']) & 
+            (df['ema_fast_slope'] < 0) & 
+            (df['ema_slow_slope'] < 0)
+        )
+        
+        return buy_signal, sell_signal
+    
+    def enhanced_rsi(self, df, period=14):
+        """RSI mejorado con zonas dinámicas"""
+        df['rsi'] = talib.RSI(df['close'], period)
+        
+        # Calcular volatilidad para ajustar zonas
+        volatility = df['close'].pct_change().rolling(20).std()
+        
+        # Ajustar zonas según volatilidad
+        if volatility.iloc[-1] > 0.05:  # Alta volatilidad
+            overbought = 80
+            oversold = 20
+        elif volatility.iloc[-1] < 0.02:  # Baja volatilidad
+            overbought = 70
+            oversold = 30
+        else:  # Volatilidad normal
+            overbought = 75
+            oversold = 25
+        
+        return df['rsi'], overbought, oversold
+    
+    def smart_bollinger_bands(self, df, period=20, std_dev=2):
+        """Bollinger Bands con entrada inteligente"""
+        df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
+            df['close'], timeperiod=period, nbdevup=std_dev, nbdevdn=std_dev
+        )
+        
+        # Calcular posición del precio dentro de las bandas
+        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
+        # Señales solo cuando el precio rompe y cierra fuera de las bandas
+        buy_signal = (df['close'] < df['bb_lower']) & (df['bb_position'].shift(1) > 0.1)
+        sell_signal = (df['close'] > df['bb_upper']) & (df['bb_position'].shift(1) < 0.9)
+        
+        return buy_signal, sell_signal
+    
+    def build_features(self, df):
+        """Construir conjunto de características completo"""
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        volume = df['volume']
+        
+        features = pd.DataFrame(index=df.index)
+        
+        # Indicadores técnicos clásicos
+        features['ema9'] = talib.EMA(close, timeperiod=9)
+        features['ema21'] = talib.EMA(close, timeperiod=21)
+        features['ema55'] = talib.EMA(close, timeperiod=55)
+        features['rsi'] = talib.RSI(close, timeperiod=14)
+        features['stoch_k'], features['stoch_d'] = talib.STOCH(high, low, close)
+        features['macd'], features['macdsignal'], features['macdhist'] = talib.MACD(close)
+        features['bb_upper'], features['bb_middle'], features['bb_lower'] = talib.BBANDS(close)
+        features['atr'] = talib.ATR(high, low, close, timeperiod=14)
+        features['cci'] = talib.CCI(high, low, close, timeperiod=14)
+        features['williams_r'] = talib.WILLR(high, low, close, timeperiod=14)
+        
+        # Indicadores cuánticos
+        features['quantum_momentum'] = self.quantum_momentum(close, volume)
+        features['quantum_volatility'] = self.quantum_volatility(close, volume)
+        features['quantum_pressure'] = self.quantum_pressure(high, low, close, volume)
+        features['market_microstructure'] = self.market_microstructure(high, low, close, volume)
+        features['liquidity'] = self.liquidity_indicator(high, low, close, volume)
+        features['whale_activity'] = self.whale_activity(close, volume)
+        
+        # Características de precio
+        features['returns'] = close.pct_change()
+        features['log_returns'] = np.log(close / close.shift(1))
+        features['volatility'] = features['returns'].rolling(20).std()
+        
+        # Características de volumen
+        features['volume_sma'] = talib.SMA(volume, timeperiod=20)
+        features['volume_ratio'] = volume / features['volume_sma']
+        features['obv'] = talib.OBV(close, volume)
+        
+        # Características temporales
+        features['hour'] = df.index.hour
+        features['day_of_week'] = df.index.dayofweek
+        features['day_of_month'] = df.index.day
+        
+        # Características de interacción
+        features['rsi_macd'] = features['rsi'] * features['macdhist']
+        features['volume_volatility'] = features['volume_ratio'] * features['volatility']
+        
+        # Optimizaciones adicionales
+        buy_ema, sell_ema = self.optimized_ema_crossover(df)
+        features['ema_buy_signal'] = buy_ema.astype(int)
+        features['ema_sell_signal'] = sell_ema.astype(int)
+        
+        rsi, overbought, oversold = self.enhanced_rsi(df)
+        features['rsi_overbought'] = (rsi > overbought).astype(int)
+        features['rsi_oversold'] = (rsi < oversold).astype(int)
+        
+        buy_bb, sell_bb = self.smart_bollinger_bands(df)
+        features['bb_buy_signal'] = buy_bb.astype(int)
+        features['bb_sell_signal'] = sell_bb.astype(int)
+        
+        # Eliminar NaNs
+        features = features.dropna()
+        
+        return features
+
+# ==============================================================================
+# CLASE DE ANÁLISIS DE SENTIMIENTO OPTIMIZADO
+# ==============================================================================
+
+class SentimentAnalyzerOptimized:
+    def __init__(self, config):
+        self.vader = SentimentIntensityAnalyzer()
+        self.twitter_config = config['twitter']
+        self.reddit_config = config['reddit']
+        self.news_config = config['news']
+        
+        # Inicializar APIs
+        self.twitter_client = tweepy.Client(bearer_token=self.twitter_config['bearer_token'])
+        self.reddit = praw.Reddit(
+            client_id=self.reddit_config['client_id'],
+            client_secret=self.reddit_config['client_secret'],
+            user_agent="quantum_fusion_optimized"
+        )
+        
+        # Pesos para cada fuente
+        self.source_weights = {
+            'twitter': 0.40,
+            'reddit': 0.30,
+            'news': 0.30
+        }
+    
+    def get_twitter_sentiment(self, query, count=100):
+        """Obtener sentimiento de Twitter con análisis mejorado"""
+        try:
+            tweets = tweepy.Paginator(
+                self.twitter_client.search_recent_tweets,
+                query=query,
+                tweet_fields=["created_at", "public_metrics"],
+                max_results=100
+            ).flatten(limit=count)
+            
+            sentiments = []
+            for tweet in tweets:
+                # Análisis VADER
+                vader_sentiment = self.vader.polarity_scores(tweet.text)
+                
+                # Análisis TextBlob
+                blob_sentiment = TextBlob(tweet.text).sentiment.polarity
+                
+                # Combinar ambos análisis
+                combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+                
+                # Ponderar por engagement
+                engagement = tweet.public_metrics.get('like_count', 0) + tweet.public_metrics.get('retweet_count', 0)
+                weight = min(1.0, np.log1p(engagement) / 5)
+                
+                sentiments.append({
+                    'timestamp': tweet.created_at,
+                    'compound': combined_sentiment * weight,
+                    'source': 'twitter'
+                })
+            
+            return pd.DataFrame(sentiments)
+        except Exception as e:
+            print(f"Error en Twitter API: {e}")
+            return pd.DataFrame()
+    
+    def get_reddit_sentiment(self, subreddit, limit=50):
+        """Obtener sentimiento de Reddit con análisis mejorado"""
+        try:
+            sentiments = []
+            for submission in self.reddit.subreddit(subreddit).hot(limit=limit):
+                # Análisis VADER
+                vader_sentiment = self.vader.polarity_scores(submission.title)
+                
+                # Análisis TextBlob
+                blob_sentiment = TextBlob(submission.title).sentiment.polarity
+                
+                # Combinar ambos análisis
+                combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+                
+                # Ponderar por upvotes y comentarios
+                engagement = submission.score + submission.num_comments
+                weight = min(1.0, np.log1p(engagement) / 10)
+                
+                sentiments.append({
+                    'timestamp': datetime.fromtimestamp(submission.created_utc),
+                    'compound': combined_sentiment * weight,
+                    'source': 'reddit'
+                })
+                
+                # Analizar comentarios principales
+                try:
+                    submission.comments.replace_more(limit=0)
+                    for comment in submission.comments.list()[:5]:
+                        if hasattr(comment, 'body'):
+                            comment_sentiment = self.vader.polarity_scores(comment.body)['compound']
+                            comment_weight = min(1.0, np.log1p(comment.score) / 5)
+                            
+                            sentiments.append({
+                                'timestamp': datetime.fromtimestamp(comment.created_utc),
+                                'compound': comment_sentiment * comment_weight * 0.5,
+                                'source': 'reddit'
+                            })
+                except:
+                    pass
+            
+            return pd.DataFrame(sentiments)
+        except Exception as e:
+            print(f"Error en Reddit API: {e}")
+            return pd.DataFrame()
+    
+    def get_news_sentiment(self, query, days=7):
+        """Obtener sentimiento de noticias con análisis mejorado"""
+        try:
+            url = f"https://newsapi.org/v2/everything?q={query}&from={(datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')}&sortBy=publishedAt&apiKey={self.news_config['api_key']}"
+            response = requests.get(url)
+            articles = response.json().get('articles', [])
+            
+            sentiments = []
+            for article in articles:
+                # Análisis VADER
+                vader_sentiment = self.vader.polarity_scores(article['title'])
+                
+                # Análisis TextBlob
+                blob_sentiment = TextBlob(article['title']).sentiment.polarity
+                
+                # Combinar ambos análisis
+                combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+                
+                # Ponderar por fuente
+                source_weight = 1.0
+                if any(word in article['source']['name'].lower() for word in ['bloomberg', 'reuters']):
+                    source_weight = 1.2
+                elif any(word in article['source']['name'].lower() for word in ['cointelegraph', 'coindesk']):
+                    source_weight = 1.1
+                
+                sentiments.append({
+                    'timestamp': article['publishedAt'],
+                    'compound': combined_sentiment * source_weight,
+                    'source': 'news'
+                })
+            
+            return pd.DataFrame(sentiments)
+        except Exception as e:
+            print(f"Error en News API: {e}")
+            return pd.DataFrame()
+    
+    def aggregate_sentiment(self, dataframes):
+        """Agrega sentimientos de múltiples fuentes con ponderación"""
+        if not dataframes or all(df.empty for df in dataframes):
+            return pd.DataFrame({'sentiment': [0], 'sentiment_volatility': [0]})
+        
+        df = pd.concat([df for df in dataframes if not df.empty])
+        if df.empty:
+            return pd.DataFrame({'sentiment': [0], 'sentiment_volatility': [0]})
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.set_index('timestamp')
+        
+        # Aplicar pesos por fuente
+        for source, weight in self.source_weights.items():
+            df.loc[df['source'] == source, 'compound'] *= weight
+        
+        # Resample a 1 hora y calcular el sentimiento promedio
+        hourly_sentiment = df.resample('1H')['compound'].mean()
+        
+        # Suavizar con media móvil exponencial
+        smoothed_sentiment = hourly_sentiment.ewm(span=3).mean()
+        
+        # Calcular la volatilidad del sentimiento
+        sentiment_volatility = hourly_sentiment.rolling(5).std()
+        
+        # Combinar sentimiento suavizado y volatilidad
+        result = pd.DataFrame({
+            'sentiment': smoothed_sentiment.fillna(0),
+            'sentiment_volatility': sentiment_volatility.fillna(0)
+        })
+        
+        return result
+
+# ==============================================================================
+# CLASE DE MODELO OPTIMIZADO
+# ==============================================================================
+
+class QuantumModelOptimized:
+    def __init__(self):
+        self.models = {
+            'xgboost': xgb.XGBClassifier(
+                n_estimators=150,
+                max_depth=5,
+                learning_rate=0.08,
+                subsample=0.75,
+                colsample_bytree=0.75,
+                reg_alpha=0.1,
+                reg_lambda=0.1,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                random_state=42
+            ),
+            'lightgbm': lgb.LGBMClassifier(
+                n_estimators=150,
+                max_depth=5,
+                learning_rate=0.08,
+                subsample=0.75,
+                colsample_bytree=0.75,
+                reg_alpha=0.1,
+                reg_lambda=0.1,
+                random_state=42,
+                verbose=-1
+            ),
+            'randomforest': RandomForestClassifier(
+                n_estimators=150,
+                max_depth=8,
+                min_samples_split=10,
+                random_state=42
+            ),
+            'gradientboosting': GradientBoostingClassifier(
+                n_estimators=150,
+                learning_rate=0.08,
+                max_depth=5,
+                random_state=42
+            )
+        }
+        
+        self.meta_model = LogisticRegression(random_state=42)
+        self.is_trained = False
+        self.model_weights = None
+        self.feature_selector = SelectKBest(score_func=f_classif, k=20)
+        
+    def feature_selection(self, X, y):
+        """Selección automática de características más importantes"""
+        try:
+            X_selected = self.feature_selector.fit_transform(X, y)
+            selected_features = X.columns[self.feature_selector.get_support()]
+            return pd.DataFrame(X_selected, columns=selected_features, index=X.index)
+        except:
+            return X
+    
+    def prepare_labels_advanced(self, df, horizon=5):
+        """Etiquetas multi-horizonte para mejor precisión"""
+        labels = {}
+        
+        # Múltiples horizontes temporales
+        for h in [3, 5, 8, 12]:
+            future_returns = df['close'].shift(-h).pct_change()
+            labels[f'label_{h}h'] = (future_returns > 0).astype(int)
+        
+        # Combinar etiquetas con pesos
+        combined_label = (
+            0.4 * labels['label_5h'] + 
+            0.3 * labels['label_3h'] + 
+            0.2 * labels['label_8h'] + 
+            0.1 * labels['label_12h']
+        )
+        
+        return (combined_label > 0.5).astype(int)
+    
+    def train(self, X, y):
+        """Entrenar el modelo con validación cruzada temporal y ensemble"""
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        # Selección de características
+        X_selected = self.feature_selection(X, y)
+        
+        # Entrenar modelos base
+        model_predictions = {}
+        model_accuracies = {}
+        
+        for name, model in self.models.items():
+            predictions = np.zeros(len(X_selected))
+            accuracies = []
+            
+            for train_idx, test_idx in tscv.split(X_selected):
+                X_train, X_test = X_selected.iloc[train_idx], X_selected.iloc[test_idx]
+                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+                
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                predictions[test_idx] = y_pred
+                
+                accuracies.append(accuracy_score(y_test, y_pred))
+            
+            model_predictions[name] = predictions
+            model_accuracies[name] = np.mean(accuracies)
+            print(f"{name} - Accuracy promedio: {model_accuracies[name]:.4f}")
+        
+        # Crear conjunto de datos para el meta-modelo
+        meta_features = pd.DataFrame(model_predictions)
+        
+        # Entrenar meta-modelo
+        meta_accuracies = []
+        for train_idx, test_idx in tscv.split(X_selected):
+            X_train_meta, X_test_meta = meta_features.iloc[train_idx], meta_features.iloc[test_idx]
+            y_train_meta, y_test_meta = y.iloc[train_idx], y.iloc[test_idx]
+            
+            self.meta_model.fit(X_train_meta, y_train_meta)
+            y_pred_meta = self.meta_model.predict(X_test_meta)
+            
+            meta_accuracies.append(accuracy_score(y_test_meta, y_pred_meta))
+        
+        # Calcular pesos basados en el rendimiento
+        total_accuracy = sum(model_accuracies.values())
+        self.model_weights = {name: acc/total_accuracy for name, acc in model_accuracies.items()}
+        
+        # Entrenar modelos finales en todos los datos
+        for name, model in self.models.items():
+            model.fit(X_selected, y)
+        
+        self.meta_model.fit(meta_features, y)
+        self.is_trained = True
+        
+        print(f"Meta-modelo - Accuracy promedio: {np.mean(meta_accuracies):.4f}")
+        return np.mean(meta_accuracies)
+    
+    def predict(self, X):
+        """Predecir probabilidades usando el ensemble"""
+        if not self.is_trained:
+            raise Exception("Modelo no entrenado")
+        
+        # Selección de características
+        X_selected = self.feature_selection(X, pd.Series([0] * len(X)))
+        
+        # Obtener predicciones de cada modelo
+        meta_features = pd.DataFrame()
+        for name, model in self.models.items():
+            meta_features[name] = model.predict_proba(X_selected)[:, 1]
+        
+        # Predicción final del meta-modelo
+        final_prediction = self.meta_model.predict_proba(meta_features)[:, 1]
+        
+        return final_prediction
+    
+    def save_model(self, path):
+        """Guardar modelo entrenado"""
+        os.makedirs('models', exist_ok=True)
+        model_data = {
+            'models': {name: joblib.dump(model, f"models/{path}_{name}.pkl") for name, model in self.models.items()},
+            'meta_model': joblib.dump(self.meta_model, f"models/{path}_meta.pkl"),
+            'feature_selector': joblib.dump(self.feature_selector, f"models/{path}_selector.pkl"),
+            'model_weights': self.model_weights
+        }
+        joblib.dump(model_data, f"models/{path}_ensemble.pkl")
+    
+    def load_model(self, path):
+        """Cargar modelo entrenado"""
+        try:
+            model_data = joblib.load(f"models/{path}_ensemble.pkl")
+            
+            self.models = {name: joblib.load(f"models/{path}_{name}.pkl") for name in self.models.keys()}
+            self.meta_model = joblib.load(f"models/{path}_meta.pkl")
+            self.feature_selector = joblib.load(f"models/{path}_selector.pkl")
+            self.model_weights = model_data['model_weights']
+            self.is_trained = True
+            print("Modelo cargado exitosamente")
+        except Exception as e:
+            print(f"Error al cargar modelo: {e}")
+
+# ==============================================================================
+# CLASE DE GESTIÓN DE RIESGOS OPTIMIZADA
+# ==============================================================================
+
+class RiskManagerOptimized:
+    def __init__(self):
+        self.volatility_window = 20
+        self.max_risk_per_trade = 0.02
+        self.max_portfolio_risk = 0.06
+        
+    def dynamic_position_sizing(self, signal_strength, market_volatility, account_balance):
+        """Tamaño de posición dinámico basado en múltiples factores"""
+        
+        # Ajustar riesgo según fuerza de la señal
+        risk_multiplier = min(2.0, signal_strength * 2)
+        
+        # Reducir riesgo en alta volatilidad
+        volatility_factor = max(0.5, 1.0 / (1 + market_volatility))
+        
+        # Calcular tamaño de posición
+        position_risk = self.max_risk_per_trade * risk_multiplier * volatility_factor
+        position_size = (account_balance * position_risk) / 0.02  # Asumiendo 2% stop loss
+        
+        return min(position_size, account_balance * 0.1)  # Máximo 10% por posición
+    
+    def adaptive_stop_loss(self, entry_price, atr, signal_confidence):
+        """Stop loss adaptativo basado en ATR y confianza"""
+        
+        # Base del stop loss en ATR
+        base_stop = atr * 2.5
+        
+        # Ajustar según confianza
+        confidence_factor = 1 + (signal_confidence - 0.5) * 0.5
+        
+        # Stop loss final
+        if signal_confidence > 0.7:
+            stop_distance = base_stop * confidence_factor * 0.8  # Más ajustado para alta confianza
+        else:
+            stop_distance = base_stop * confidence_factor * 1.2  # Más amplio para baja confianza
+        
+        return stop_distance
+    
+    def trailing_stop_optimized(self, current_price, highest_price, entry_price, is_long=True):
+        """Trailing stop con aceleración no lineal"""
+        
+        profit_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+        
+        # Aceleración del trailing stop según ganancias
+        if profit_pct > 0.05:  # >5% ganancia
+            trailing_pct = 0.015  # 1.5%
+        elif profit_pct > 0.03:  # >3% ganancia
+            trailing_pct = 0.02   # 2%
+        else:
+            trailing_pct = 0.025  # 2.5%
+        
+        if is_long:
+            return max(highest_price * (1 - trailing_pct), entry_price * 0.98)
+        else:
+            return min(highest_price * (1 + trailing_pct), entry_price * 1.02)
+
+# ==============================================================================
+# CLASE DE FILTRADO DE SEÑALES
+# ==============================================================================
+
+class SignalFilter:
+    def __init__(self):
+        self.min_confidence = 0.65
+    
+    def multi_timeframe_confirmation(self, symbol, exchange, timeframes=['15m', '1h', '4h']):
+        """Confirmación de señal en múltiples timeframes"""
+        signals = {}
+        
+        for tf in timeframes:
+            try:
+                # Obtener datos para cada timeframe
+                ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=100)
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                # Calcular indicadores clave
+                df['rsi'] = talib.RSI(df['close'], timeperiod=14)
+                df['macd'], _, _ = talib.MACD(df['close'])
+                df['ema_trend'] = np.where(df['close'] > talib.EMA(df['close'], 21), 1, -1)
+                
+                # Generar señal para este timeframe
+                signal = self.generate_timeframe_signal(df)
+                signals[tf] = signal
+            except:
+                signals[tf] = 0
+        
+        # Ponderar señales por timeframe (mayor peso a timeframes más largos)
+        weights = {'15m': 0.2, '1h': 0.5, '4h': 0.3}
+        weighted_signal = sum(signals.get(tf, 0) * weights[tf] for tf in timeframes)
+        
+        return weighted_signal
+    
+    def generate_timeframe_signal(self, df):
+        """Generar señal para un timeframe específico"""
+        if df.empty:
+            return 0
+        
+        latest = df.iloc[-1]
+        
+        signal = 0
+        
+        # RSI conditions
+        if latest['rsi'] > 70:
+            signal -= 0.3
+        elif latest['rsi'] < 30:
+            signal += 0.3
+        
+        # MACD conditions
+        if latest['macd'] > 0:
+            signal += 0.2
+        else:
+            signal -= 0.2
+        
+        # EMA trend
+        signal += latest['ema_trend'] * 0.5
+        
+        return np.clip(signal, -1, 1)
+    
+    def volume_confirmation(self, df, lookback=10):
+        """Confirmación por volumen"""
+        if df.empty or len(df) < lookback:
+            return 1.0
+        
+        current_volume = df['volume'].iloc[-1]
+        avg_volume = df['volume'].rolling(lookback).mean().iloc[-1]
+        
+        volume_ratio = current_volume / avg_volume
+        
+        if volume_ratio > 1.5:  # Volumen alto confirma la señal
+            return 1.2
+        elif volume_ratio < 0.7:  # Volumen bajo debilita la señal
+            return 0.8
+        else:
+            return 1.0
+
+# ==============================================================================
+# CLASE PRINCIPAL DE TRADING OPTIMIZADA
+# ==============================================================================
+
+class QuantumTradingBotOptimized:
+    def __init__(self, config_path):
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Inicializar exchange
+        self.exchange = ccxt.binance({
+            'apiKey': self.config['binance']['api_key'],
+            'secret': self.config['binance']['api_secret'],
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future',
+            }
+        })
+        
+        # Inicializar componentes
+        self.indicators = QuantumIndicatorsOptimized()
+        self.sentiment = SentimentAnalyzerOptimized(self.config)
+        self.model = QuantumModelOptimized()
+        self.risk_manager = RiskManagerOptimized()
+        self.signal_filter = SignalFilter()
+        
+        # Configuración de trading
+        self.risk_per_trade = self.config['risk']['risk_per_trade']
+        self.stop_loss_pct = self.config['risk']['stop_loss_pct']
+        self.take_profit_pct = self.config['risk']['take_profit_pct']
+        self.max_positions = self.config['risk']['max_positions']
+        self.max_daily_loss = self.config['risk'].get('max_daily_loss', 0.05)
+        
+        # Estado del bot
+        self.positions = {}
+        self.last_model_update = None
+        self.daily_pnl = 0.0
+        self.last_day_reset = datetime.now().date()
+        
+        # Crear directorios necesarios
+        os.makedirs('models', exist_ok=True)
+        os.makedirs('logs', exist_ok=True)
+        
+        # Configurar logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('logs/quantum_fusion_optimized.log'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def get_market_data(self, symbol, timeframe, limit=500):
+        """Obtener datos de mercado"""
+        try:
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df.set_index('timestamp')
+        except Exception as e:
+            self.logger.error(f"Error obteniendo datos de mercado: {e}")
+            return pd.DataFrame()
+    
+    def update_sentiment_data(self, symbol):
+        """Actualizar datos de sentimiento"""
+        base_currency = symbol.split('/')[0]
+        
+        # Obtener sentimiento de diferentes fuentes
+        twitter_sentiment = self.sentiment.get_twitter_sentiment(base_currency, count=100)
+        reddit_sentiment = self.sentiment.get_reddit_sentiment(f'CryptoCurrency', limit=50)
+        news_sentiment = self.sentiment.get_news_sentiment(base_currency, days=3)
+        
+        # Agregar sentimiento
+        sentiment_df = self.sentiment.aggregate_sentiment([
+            twitter_sentiment, reddit_sentiment, news_sentiment
+        ])
+        
+        return sentiment_df
+    
+    def prepare_features(self, symbol, timeframe='1h'):
+        """Preparar características para el modelo"""
+        # Obtener datos de mercado
+        df = self.get_market_data(symbol, timeframe)
+        if df.empty:
+            return pd.DataFrame()
+        
+        # Obtener datos de sentimiento
+        sentiment_df = self.update_sentiment_data(symbol)
+        
+        # Construir características
+        features = self.indicators.build_features(df)
+        
+        # Unir con sentimiento
+        features = features.join(sentiment_df, how='left')
+        features['sentiment'] = features['sentiment'].fillna(0)
+        features['sentiment_volatility'] = features['sentiment_volatility'].fillna(0)
+        
+        # Añadir características de mercado adicionales
+        features['market_regime'] = self.detect_market_regime(df)
+        
+        return features
+    
+    def detect_market_regime(self, df, window=20):
+        """Detectar el régimen de mercado"""
+        if df.empty or len(df) < window:
+            return pd.Series(0, index=df.index)
+        
+        close = df['close']
+        
+        # Calcular tendencia
+        trend = close.pct_change(window).rolling(window).mean()
+        
+        # Calcular volatilidad
+        volatility = close.pct_change().rolling(window).std()
+        
+        # Clasificar régimen
+        regime = pd.Series(0, index=close.index)  # 0: rango, 1: tendencia alcista, -1: tendencia bajista
+        
+        # Tendencia alcista
+        regime[(trend > 0.01) & (volatility < 0.05)] = 1
+        
+        # Tendencia bajista
+        regime[(trend < -0.01) & (volatility < 0.05)] = -1
+        
+        # Mercado volátil
+        regime[volatility > 0.05] = 2
+        
+        return regime
+    
+    def train_model(self, symbol):
+        """Entrenar o actualizar el modelo"""
+        self.logger.info(f"Entrenando modelo para {symbol}...")
+        
+        # Preparar características
+        features = self.prepare_features(symbol)
+        if features.empty:
+            self.logger.error("No se pudieron preparar las características")
+            return 0
+        
+        # Preparar etiquetas
+        labels = self.model.prepare_labels_advanced(features)
+        
+        # Entrenar modelo
+        accuracy = self.model.train(features, labels)
+        
+        # Guardar modelo
+        self.model.save_model(f'{symbol}_model')
+        
+        self.last_model_update = datetime.now()
+        self.logger.info(f"Modelo entrenado con accuracy: {accuracy:.4f}")
+        
+        return accuracy
+    
+    def generate_enhanced_signal(self, symbol):
+        """Generar señal con múltiples filtros"""
+        
+        # Obtener datos en múltiples timeframes
+        timeframes = ['15m', '1h', '4h']
+        mtf_signal = self.signal_filter.multi_timeframe_confirmation(symbol, self.exchange, timeframes)
+        
+        # Obtener datos principales
+        df = self.get_market_data(symbol, '1h', limit=100)
+        if df.empty:
+            return 'hold', 0.5
+        
+        # Confirmación por volumen
+        volume_confirmation = self.signal_filter.volume_confirmation(df)
+        
+        # Obtener predicción del modelo
+        features = self.prepare_features(symbol)
+        if features.empty:
+            return 'hold', 0.5
+        
+        latest_features = features.iloc[-1:].copy()
+        model_prediction = self.model.predict(latest_features)[0]
+        
+        # Detectar régimen de mercado
+        market_regime = self.detect_market_regime(df)
+        current_regime = market_regime.iloc[-1] if not market_regime.empty else 0
+        
+        # Combinar todas las señales
+        combined_signal = (
+            0.4 * model_prediction +
+            0.3 * mtf_signal +
+            0.2 * volume_confirmation +
+            0.1 * self.get_regime_bias(current_regime)
+        )
+        
+        # Ajustar umbrales según régimen
+        if current_regime == 1:  # Tendencia alcista
+            buy_threshold = 0.60
+            sell_threshold = 0.35
+        elif current_regime == -1:  # Tendencia bajista
+            buy_threshold = 0.70
+            sell_threshold = 0.25
+        else:  # Rango
+            buy_threshold = 0.65
+            sell_threshold = 0.35
+        
+        # Generar señal final
+        if combined_signal > buy_threshold:
+            return 'buy', combined_signal
+        elif combined_signal < sell_threshold:
+            return 'sell', combined_signal
+        else:
+            return 'hold', combined_signal
+    
+    def get_regime_bias(self, regime):
+        """Obtener bias según régimen de mercado"""
+        if regime == 1:  # Tendencia alcista
+            return 0.2
+        elif regime == -1:  # Tendencia bajista
+            return -0.2
+        else:  # Rango
+            return 0.0
+    
+    def execute_optimized_trade(self, symbol, signal, price, confidence):
+        """Ejecutar operación con gestión optimizada"""
+        
+        if signal == 'hold':
+            return
+        
+        # Calcular volatilidad actual
+        df = self.get_market_data(symbol, '1h', limit=50)
+        if df.empty:
+            return
+        
+        atr = talib.ATR(df['high'], df['low'], df['close'], timeperiod=14).iloc[-1]
+        
+        # Calcular tamaño de posición optimizado
+        market_volatility = df['close'].pct_change().rolling(20).std().iloc[-1]
+        account_balance = self.exchange.fetch_balance()['USDT']['free']
+        
+        position_size = self.risk_manager.dynamic_position_sizing(
+            confidence, market_volatility, account_balance
+        )
+        
+        # Calcular stop loss adaptativo
+        stop_distance = self.risk_manager.adaptive_stop_loss(price, atr, confidence)
+        
+        try:
+            if signal == 'buy':
+                # Colocar orden de compra
+                order = self.exchange.create_market_buy_order(symbol, position_size)
+                
+                # Calcular niveles
+                stop_loss = price * (1 - stop_distance)
+                take_profit = price * (1 + stop_distance * 2)  # Ratio riesgo/beneficio 1:2
+                
+                # Guardar posición con trailing stop optimizado
+                self.positions[symbol] = {
+                    'side': 'buy',
+                    'entry_price': price,
+                    'quantity': position_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'highest_price': price,
+                    'order_id': order['id'],
+                    'confidence': confidence,
+                    'atr': atr
+                }
+                
+                self.logger.info(f"Compra optimizada: {symbol} @ {price}, SL: {stop_loss}, TP: {take_profit}")
+                
+            elif signal == 'sell':
+                # Colocar orden de venta
+                order = self.exchange.create_market_sell_order(symbol, position_size)
+                
+                # Calcular niveles
+                stop_loss = price * (1 + stop_distance)
+                take_profit = price * (1 - stop_distance * 2)
+                
+                # Guardar posición
+                self.positions[symbol] = {
+                    'side': 'sell',
+                    'entry_price': price,
+                    'quantity': position_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'lowest_price': price,
+                    'order_id': order['id'],
+                    'confidence': confidence,
+                    'atr': atr
+                }
+                
+                self.logger.info(f"Venta optimizada: {symbol} @ {price}, SL: {stop_loss}, TP: {take_profit}")
+                
+        except Exception as e:
+            self.logger.error(f"Error al ejecutar operación optimizada: {e}")
+    
+    def check_positions_optimized(self, symbol, current_price):
+        """Verificar posiciones con trailing stop optimizado"""
+        if symbol not in self.positions:
+            return
+        
+        position = self.positions[symbol]
+        
+        try:
+            if position['side'] == 'buy':
+                # Actualizar precio más alto
+                if current_price > position['highest_price']:
+                    position['highest_price'] = current_price
+                
+                # Calcular trailing stop optimizado
+                trailing_stop = self.risk_manager.trailing_stop_optimized(
+                    current_price, position['highest_price'], position['entry_price'], is_long=True
+                )
+                
+                # Actualizar stop loss si el trailing stop es más favorable
+                position['stop_loss'] = max(position['stop_loss'], trailing_stop)
+                
+                # Verificar stop loss
+                if current_price <= position['stop_loss']:
+                    self.exchange.create_market_sell_order(symbol, position['quantity'])
+                    pnl = (current_price - position['entry_price']) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Stop loss optimizado activado para {symbol}, PnL: {pnl:.2%}")
+                
+                # Verificar take profit
+                elif current_price >= position['take_profit']:
+                    self.exchange.create_market_sell_order(symbol, position['quantity'])
+                    pnl = (current_price - position['entry_price']) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Take profit activado para {symbol}, PnL: {pnl:.2%}")
+            
+            elif position['side'] == 'sell':
+                # Actualizar precio más bajo
+                if current_price < position['lowest_price']:
+                    position['lowest_price'] = current_price
+                
+                # Calcular trailing stop optimizado
+                trailing_stop = self.risk_manager.trailing_stop_optimized(
+                    current_price, position['lowest_price'], position['entry_price'], is_long=False
+                )
+                
+                # Actualizar stop loss
+                position['stop_loss'] = min(position['stop_loss'], trailing_stop)
+                
+                # Verificar stop loss
+                if current_price >= position['stop_loss']:
+                    self.exchange.create_market_buy_order(symbol, position['quantity'])
+                    pnl = (position['entry_price'] - current_price) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Stop loss optimizado activado para {symbol}, PnL: {pnl:.2%}")
+                
+                # Verificar take profit
+                elif current_price <= position['take_profit']:
+                    self.exchange.create_market_buy_order(symbol, position['quantity'])
+                    pnl = (position['entry_price'] - current_price) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Take profit activado para {symbol}, PnL: {pnl:.2%}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error al verificar posición optimizada: {e}")
+    
+    def reset_daily_pnl(self):
+        """Reiniciar PnL diario si es un nuevo día"""
+        current_date = datetime.now().date()
+        if current_date != self.last_day_reset:
+            self.daily_pnl = 0.0
+            self.last_day_reset = current_date
+            self.logger.info("Reiniciando PnL diario")
+    
+    def run(self):
+        """Ejecutar bot de trading"""
+        self.logger.info("Iniciando Quantum Fusion Optimized...")
+        
+        # Entrenar modelos iniciales
+        for symbol in self.config['symbols']:
+            try:
+                self.train_model(symbol)
+            except Exception as e:
+                self.logger.error(f"Error entrenando modelo para {symbol}: {e}")
+        
+        # Bucle principal
+        while True:
+            try:
+                # Reiniciar PnL diario si es necesario
+                self.reset_daily_pnl()
+                
+                # Actualizar modelos diariamente
+                if self.last_model_update is None or \
+                   (datetime.now() - self.last_model_update) > timedelta(hours=24):
+                    for symbol in self.config['symbols']:
+                        try:
+                            self.train_model(symbol)
+                        except Exception as e:
+                            self.logger.error(f"Error actualizando modelo para {symbol}: {e}")
+                
+                # Procesar cada símbolo
+                for symbol in self.config['symbols']:
+                    try:
+                        # Obtener precio actual
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        current_price = ticker['last']
+                        
+                        # Generar señal
+                        signal, confidence = self.generate_enhanced_signal(symbol)
+                        
+                        # Ejecutar operación si hay señal
+                        if signal != 'hold':
+                            self.execute_optimized_trade(symbol, signal, current_price, confidence)
+                        
+                        # Verificar posiciones abiertas
+                        self.check_positions_optimized(symbol, current_price)
+                        
+                        self.logger.info(f"{symbol}: {signal} (confianza: {confidence:.2f}), PnL diario: {self.daily_pnl:.2%}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error procesando {symbol}: {e}")
+                
+                # Esperar antes del siguiente ciclo
+                time.sleep(self.config['trading']['interval'])
+                
+            except Exception as e:
+                self.logger.error(f"Error en bucle principal: {e}")
+                time.sleep(60)
+
+# ==============================================================================
+# ARCHIVO DE CONFIGURACIÓN
+# ==============================================================================
+
+def create_config_file():
+    """Crear archivo de configuración por defecto"""
+    config = {
+        'symbols': ["BTC/USDT", "ETH/USDT", "BNB/USDT"],
+        'binance': {
+            'api_key': "tu_api_key",
+            'api_secret': "tu_api_secret"
+        },
+        'twitter': {
+            'bearer_token': "tu_bearer_token"
+        },
+        'reddit': {
+            'client_id': "tu_client_id",
+            'client_secret': "tu_client_secret"
+        },
+        'news': {
+            'api_key': "tu_api_key"
+        },
+        'risk': {
+            'risk_per_trade': 0.01,
+            'stop_loss_pct': 0.02,
+            'take_profit_pct': 0.04,
+            'max_positions': 2,
+            'max_daily_loss': 0.05
+        },
+        'trading': {
+            'interval': 300,
+            'paper_trading': False
+        }
+    }
+    
+    with open('config_optimized.yaml', 'w') as f:
+        yaml.dump(config, f, default_flow_style=False)
+    
+    print("Archivo de configuración creado: config_optimized.yaml")
+
+# ==============================================================================
+# ARCHIVO PRINCIPAL DE EJECUCIÓN
+# ==============================================================================
+
+def main():
+    """Función principal de ejecución"""
+    
+    # Configurar logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('logs/quantum_fusion_optimized.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info("Iniciando Quantum Fusion Optimized")
+    
+    try:
+        # Crear archivo de configuración si no existe
+        if not os.path.exists('config_optimized.yaml'):
+            create_config_file()
+            logger.info("Por favor, configura tus APIs en config_optimized.yaml antes de continuar")
+            return
+        
+        # Crear y ejecutar bot
+        bot = QuantumTradingBotOptimized('config_optimized.yaml')
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("Bot detenido por el usuario")
+    except Exception as e:
+        logger.error(f"Error fatal: {e}")
+
+if __name__ == "__main__":
+    main()

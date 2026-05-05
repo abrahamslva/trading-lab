@@ -1,0 +1,2639 @@
+Archivo 13: utils.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+UTILIDADES PARA QUANTUM TRADING ULTIMATE - VERSIÓN COMPLETA
+Funciones de utilidad para el sistema de trading con todas las mejoras
+"""
+
+import os
+import sys
+import time
+import logging
+import json
+import pickle
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional, Union, Any
+import yaml
+from pathlib import Path
+import warnings
+import scipy.stats as stats
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+# Suprimir advertencias
+warnings.filterwarnings('ignore')
+
+def setup_logging(level: str = 'INFO', log_file: str = None, max_size: str = '10MB', backup_count: int = 5) -> logging.Logger:
+    """
+    Configurar sistema de logging con rotación de archivos
+    
+    Args:
+        level: Nivel de logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_file: Ruta al archivo de log
+        max_size: Tamaño máximo del archivo antes de rotar
+        backup_count: Número de archivos de backup a mantener
+    
+    Returns:
+        Logger configurado
+    """
+    try:
+        # Crear directorio de logs si no existe
+        log_dir = 'logs'
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        # Configurar nombre de archivo si no se proporciona
+        if log_file is None:
+            log_file = os.path.join(log_dir, 'quantum_trading.log')
+        
+        # Configurar formato
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # Configurar logger principal
+        logger = logging.getLogger('QuantumTrading')
+        logger.setLevel(getattr(logging, level.upper()))
+        
+        # Limpiar handlers existentes
+        logger.handlers.clear()
+        
+        # Handler para consola
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        # Handler para archivo con rotación
+        try:
+            from logging.handlers import RotatingFileHandler
+            file_handler = RotatingFileHandler(
+                log_file, maxBytes=_parse_size(max_size), backupCount=backup_count
+            )
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except ImportError:
+            # Fallback si RotatingFileHandler no está disponible
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        
+        return logger
+    
+    except Exception as e:
+        # Configuración básica si hay errores
+        logging.basicConfig(
+            level=getattr(logging, level.upper()),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        return logging.getLogger('QuantumTrading')
+
+def _parse_size(size_str: str) -> int:
+    """
+    Convertir string de tamaño a bytes
+    
+    Args:
+        size_str: String de tamaño (ej. '10MB', '1GB')
+    
+    Returns:
+        Tamaño en bytes
+    """
+    size_str = size_str.upper()
+    if 'KB' in size_str:
+        return int(size_str.replace('KB', '')) * 1024
+    elif 'MB' in size_str:
+        return int(size_str.replace('MB', '')) * 1024 * 1024
+    elif 'GB' in size_str:
+        return int(size_str.replace('GB', '')) * 1024 * 1024 * 1024
+    else:
+        return int(size_str)
+
+def create_directories():
+    """Crear estructura de directorios necesaria para el sistema"""
+    directories = [
+        'logs',
+        'data',
+        'models',
+        'models/ensemble',
+        'models/multi_temporal',
+        'models/probabilistic',
+        'backtests',
+        'reports',
+        'cache',
+        'exports'
+    ]
+    
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+
+def save_object(obj: Any, filepath: str) -> bool:
+    """
+    Guardar objeto en archivo usando pickle
+    
+    Args:
+        obj: Objeto a guardar
+        filepath: Ruta del archivo
+    
+    Returns:
+        True si se guardó correctamente, False en caso contrario
+    """
+    try:
+        with open(filepath, 'wb') as f:
+            pickle.dump(obj, f)
+        return True
+    except Exception as e:
+        logging.error(f"Error guardando objeto en {filepath}: {e}")
+        return False
+
+def load_object(filepath: str) -> Any:
+    """
+    Cargar objeto desde archivo usando pickle
+    
+    Args:
+        filepath: Ruta del archivo
+    
+    Returns:
+        Objeto cargado o None si hay error
+    """
+    try:
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        logging.error(f"Error cargando objeto desde {filepath}: {e}")
+        return None
+
+def save_json(data: Dict, filepath: str) -> bool:
+    """
+    Guardar diccionario en archivo JSON
+    
+    Args:
+        data: Diccionario a guardar
+        filepath: Ruta del archivo
+    
+    Returns:
+        True si se guardó correctamente, False en caso contrario
+    """
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        logging.error(f"Error guardando JSON en {filepath}: {e}")
+        return False
+
+def load_json(filepath: str) -> Dict:
+    """
+    Cargar diccionario desde archivo JSON
+    
+    Args:
+        filepath: Ruta del archivo
+    
+    Returns:
+        Diccionario cargado o vacío si hay error
+    """
+    try:
+        with open(filepath, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Error cargando JSON desde {filepath}: {e}")
+        return {}
+
+def calculate_returns(prices: pd.Series, method: str = 'simple') -> pd.Series:
+    """
+    Calcular retornos de una serie de precios
+    
+    Args:
+        prices: Serie de precios
+        method: Método de cálculo ('simple' o 'log')
+    
+    Returns:
+        Serie de retornos
+    """
+    if method == 'simple':
+        return prices.pct_change()
+    elif method == 'log':
+        return np.log(prices / prices.shift(1))
+    else:
+        raise ValueError(f"Método no reconocido: {method}")
+
+def calculate_volatility(returns: pd.Series, window: int = 20, annualize: bool = True) -> pd.Series:
+    """
+    Calcular volatilidad de una serie de retornos
+    
+    Args:
+        returns: Serie de retornos
+        window: Ventana para el cálculo
+        annualize: Si se debe anualizar la volatilidad
+    
+    Returns:
+        Serie de volatilidad
+    """
+    vol = returns.rolling(window=window).std()
+    
+    if annualize:
+        # Asumir datos diarios, ajustar a anual
+        trading_days = 252
+        vol = vol * np.sqrt(trading_days)
+    
+    return vol
+
+def calculate_sharpe_ratio(returns: pd.Series, risk_free_rate: float = 0.0, annualize: bool = True) -> float:
+    """
+    Calcular ratio de Sharpe
+    
+    Args:
+        returns: Serie de retornos
+        risk_free_rate: Tasa libre de riesgo
+        annualize: Si se debe anualizar
+    
+    Returns:
+        Ratio de Sharpe
+    """
+    excess_returns = returns - risk_free_rate
+    sharpe = excess_returns.mean() / excess_returns.std()
+    
+    if annualize:
+        # Asumir datos diarios, ajustar a anual
+        trading_days = 252
+        sharpe = sharpe * np.sqrt(trading_days)
+    
+    return sharpe
+
+def calculate_max_drawdown(equity_curve: pd.Series) -> Tuple[float, pd.Timestamp, pd.Timestamp]:
+    """
+    Calcular drawdown máximo
+    
+    Args:
+        equity_curve: Serie de valores del portafolio
+    
+    Returns:
+        Tupla con (drawdown máximo, fecha inicio, fecha fin)
+    """
+    # Calcular picos y drawdowns
+    peak = equity_curve.expanding().max()
+    drawdown = (equity_curve - peak) / peak
+    
+    # Encontrar drawdown máximo
+    max_dd = drawdown.min()
+    
+    # Encontrar fechas de inicio y fin
+    end_date = drawdown.idxmin()
+    start_date = equity_curve.loc[:end_date].idxmax()
+    
+    return max_dd, start_date, end_date
+
+def calculate_calmar_ratio(equity_curve: pd.Series, returns: pd.Series) -> float:
+    """
+    Calcular ratio de Calmar (retorno anualizado / drawdown máximo absoluto)
+    
+    Args:
+        equity_curve: Serie de valores del portafolio
+        returns: Serie de retornos
+    
+    Returns:
+        Ratio de Calmar
+    """
+    # Retorno anualizado
+    total_return = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
+    days = (equity_curve.index[-1] - equity_curve.index[0]).days
+    annual_return = (1 + total_return) ** (365 / days) - 1
+    
+    # Drawdown máximo
+    max_dd, _, _ = calculate_max_drawdown(equity_curve)
+    
+    # Ratio de Calmar
+    return annual_return / abs(max_dd) if max_dd != 0 else 0
+
+def calculate_sortino_ratio(returns: pd.Series, target_return: float = 0.0, annualize: bool = True) -> float:
+    """
+    Calcular ratio de Sortino
+    
+    Args:
+        returns: Serie de retornos
+        target_return: Retorno objetivo
+        annualize: Si se debe anualizar
+    
+    Returns:
+        Ratio de Sortino
+    """
+    excess_returns = returns - target_return
+    
+    # Calcular desviación estándar de retornos negativos
+    downside_returns = excess_returns[excess_returns < 0]
+    downside_std = downside_returns.std()
+    
+    sortino = excess_returns.mean() / downside_std if downside_std != 0 else 0
+    
+    if annualize:
+        # Asumir datos diarios, ajustar a anual
+        trading_days = 252
+        sortino = sortino * np.sqrt(trading_days)
+    
+    return sortino
+
+def normalize_data(data: pd.DataFrame, method: str = 'standard') -> Tuple[pd.DataFrame, Any]:
+    """
+    Normalizar datos
+    
+    Args:
+        data: DataFrame a normalizar
+        method: Método de normalización ('standard', 'minmax', 'robust')
+    
+    Returns:
+        Tupla con (DataFrame normalizado, scaler)
+    """
+    if method == 'standard':
+        scaler = StandardScaler()
+    elif method == 'minmax':
+        scaler = MinMaxScaler()
+    elif method == 'robust':
+        scaler = RobustScaler()
+    else:
+        raise ValueError(f"Método de normalización no reconocido: {method}")
+    
+    normalized_data = pd.DataFrame(
+        scaler.fit_transform(data),
+        index=data.index,
+        columns=data.columns
+    )
+    
+    return normalized_data, scaler
+
+def calculate_correlation_matrix(data: pd.DataFrame, method: str = 'pearson') -> pd.DataFrame:
+    """
+    Calcular matriz de correlación
+    
+    Args:
+        data: DataFrame de datos
+        method: Método de correlación ('pearson', 'spearman', 'kendall')
+    
+    Returns:
+        Matriz de correlación
+    """
+    return data.corr(method=method)
+
+def calculate_portfolio_metrics(returns: pd.Series, benchmark_returns: pd.Series = None) -> Dict:
+    """
+    Calcular métricas de portafolio
+    
+    Args:
+        returns: Serie de retornos del portafolio
+        benchmark_returns: Serie de retornos del benchmark (opcional)
+    
+    Returns:
+        Diccionario con métricas
+    """
+    metrics = {
+        'total_return': (1 + returns).prod() - 1,
+        'annualized_return': (1 + returns.mean()) ** 252 - 1,
+        'volatility': returns.std() * np.sqrt(252),
+        'sharpe_ratio': calculate_sharpe_ratio(returns),
+        'sortino_ratio': calculate_sortino_ratio(returns),
+        'max_drawdown': calculate_max_drawdown((1 + returns).cumprod())[0],
+        'calmar_ratio': calculate_calmar_ratio((1 + returns).cumprod(), returns),
+        'skewness': returns.skew(),
+        'kurtosis': returns.kurtosis(),
+        'var_95': returns.quantile(0.05),
+        'var_99': returns.quantile(0.01),
+        'cvar_95': returns[returns <= returns.quantile(0.05)].mean(),
+        'cvar_99': returns[returns <= returns.quantile(0.01)].mean(),
+        'win_rate': (returns > 0).mean(),
+        'profit_factor': returns[returns > 0].sum() / abs(returns[returns < 0].sum()) if (returns < 0).sum() != 0 else float('inf')
+    }
+    
+    # Si se proporciona benchmark, calcular métricas relativas
+    if benchmark_returns is not None:
+        # Beta
+        covariance = np.cov(returns, benchmark_returns)[0, 1]
+        benchmark_variance = np.var(benchmark_returns)
+        metrics['beta'] = covariance / benchmark_variance if benchmark_variance != 0 else 0
+        
+        # Alpha
+        risk_free_rate = 0.0
+        benchmark_return = (1 + benchmark_returns).prod() - 1
+        portfolio_return = metrics['total_return']
+        metrics['alpha'] = portfolio_return - (risk_free_rate + metrics['beta'] * (benchmark_return - risk_free_rate))
+        
+        # Ratio de información
+        tracking_error = (returns - benchmark_returns).std() * np.sqrt(252)
+        metrics['information_ratio'] = (portfolio_return - benchmark_return) / tracking_error if tracking_error != 0 else 0
+    
+    return metrics
+
+def resample_timeframe(data: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """
+    Cambiar timeframe de datos OHLCV
+    
+    Args:
+        data: DataFrame con datos OHLCV
+        timeframe: Nuevo timeframe ('5T', '15T', '1H', '4H', '1D', etc.)
+    
+    Returns:
+        DataFrame con nuevo timeframe
+    """
+    # Definir reglas de agregación
+    ohlc_dict = {
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }
+    
+    # Aplicar reglas a columnas que existen
+    agg_dict = {col: ohlc_dict[col] for col in ohlc_dict if col in data.columns}
+    
+    # Agregar columnas adicionales sin cambios
+    for col in data.columns:
+        if col not in agg_dict:
+            agg_dict[col] = 'mean'
+    
+    return data.resample(timeframe).agg(agg_dict).dropna()
+
+def split_train_test(data: pd.DataFrame, test_size: float = 0.2, shuffle: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Dividir datos en conjuntos de entrenamiento y prueba
+    
+    Args:
+        data: DataFrame a dividir
+        test_size: Proporción para conjunto de prueba
+        shuffle: Si se deben mezclar los datos
+    
+    Returns:
+        Tupla con (datos entrenamiento, datos prueba)
+    """
+    if shuffle:
+        # Para datos que no son series temporales
+        from sklearn.model_selection import train_test_split
+        return train_test_split(data, test_size=test_size, random_state=42)
+    else:
+        # Para series temporales, mantener orden cronológico
+        split_idx = int(len(data) * (1 - test_size))
+        return data.iloc[:split_idx], data.iloc[split_idx:]
+
+def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+    """
+    Calcular RSI (Relative Strength Index)
+    
+    Args:
+        prices: Serie de precios
+        period: Período para el cálculo
+    
+    Returns:
+        Serie con valores de RSI
+    """
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi
+
+def calculate_macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, pd.Series]:
+    """
+    Calcular MACD (Moving Average Convergence Divergence)
+    
+    Args:
+        prices: Serie de precios
+        fast: Período EMA rápida
+        slow: Período EMA lenta
+        signal: Período línea de señal
+    
+    Returns:
+        Diccionario con series de MACD, señal e histograma
+    """
+    ema_fast = prices.ewm(span=fast).mean()
+    ema_slow = prices.ewm(span=slow).mean()
+    
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal).mean()
+    histogram = macd - signal_line
+    
+    return {
+        'macd': macd,
+        'signal': signal_line,
+        'histogram': histogram
+    }
+
+def calculate_bollinger_bands(prices: pd.Series, period: int = 20, std_dev: float = 2) -> Dict[str, pd.Series]:
+    """
+    Calcular Bandas de Bollinger
+    
+    Args:
+        prices: Serie de precios
+        period: Período para la media móvil
+        std_dev: Desviaciones estándar para las bandas
+    
+    Returns:
+        Diccionario con series de banda superior, media e inferior
+    """
+    sma = prices.rolling(window=period).mean()
+    std = prices.rolling(window=period).std()
+    
+    upper_band = sma + (std * std_dev)
+    lower_band = sma - (std * std_dev)
+    
+    return {
+        'upper': upper_band,
+        'middle': sma,
+        'lower': lower_band
+    }
+
+def detect_outliers(data: pd.Series, method: str = 'iqr', threshold: float = 1.5) -> pd.Series:
+    """
+    Detectar valores atípicos en una serie
+    
+    Args:
+        data: Serie de datos
+        method: Método de detección ('iqr', 'zscore')
+        threshold: Umbral para detección
+    
+    Returns:
+        Serie booleana con True para valores atípicos
+    """
+    if method == 'iqr':
+        q1 = data.quantile(0.25)
+        q3 = data.quantile(0.75)
+        iqr = q3 - q1
+        
+        lower_bound = q1 - (threshold * iqr)
+        upper_bound = q3 + (threshold * iqr)
+        
+        outliers = (data < lower_bound) | (data > upper_bound)
+    
+    elif method == 'zscore':
+        z_scores = np.abs(stats.zscore(data.dropna()))
+        outliers = pd.Series(False, index=data.index)
+        outliers.loc[data.dropna().index] = z_scores > threshold
+    
+    else:
+        raise ValueError(f"Método de detección de outliers no reconocido: {method}")
+    
+    return outliers
+
+def fill_missing_values(data: pd.DataFrame, method: str = 'forward') -> pd.DataFrame:
+    """
+    Rellenar valores faltantes en un DataFrame
+    
+    Args:
+        data: DataFrame con valores faltantes
+        method: Método de relleno ('forward', 'backward', 'interpolate', 'mean')
+    
+    Returns:
+        DataFrame con valores rellenados
+    """
+    if method == 'forward':
+        return data.fillna(method='ffill')
+    elif method == 'backward':
+        return data.fillna(method='bfill')
+    elif method == 'interpolate':
+        return data.interpolate()
+    elif method == 'mean':
+        return data.fillna(data.mean())
+    else:
+        raise ValueError(f"Método de relleno no reconocido: {method}")
+
+def create_price_chart(data: pd.DataFrame, title: str = "Price Chart", save_path: str = None) -> go.Figure:
+    """
+    Crear gráfico de precios interactivo
+    
+    Args:
+        data: DataFrame con datos OHLCV
+        title: Título del gráfico
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    fig = go.Figure()
+    
+    # Añadir velas
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name='Price'
+    ))
+    
+    # Configurar layout
+    fig.update_layout(
+        title=title,
+        xaxis_rangeslider_visible=False,
+        yaxis_title='Price',
+        xaxis_title='Date'
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def create_correlation_heatmap(corr_matrix: pd.DataFrame, title: str = "Correlation Matrix", save_path: str = None) -> go.Figure:
+    """
+    Crear mapa de calor de correlación
+    
+    Args:
+        corr_matrix: Matriz de correlación
+        title: Título del gráfico
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_matrix.values,
+        x=corr_matrix.columns,
+        y=corr_matrix.columns,
+        colorscale='RdBu',
+        zmid=0,
+        text=corr_matrix.values.round(2),
+        texttemplate="%{text}",
+        textfont={"size": 10},
+        hoverongaps=False
+    ))
+    
+    fig.update_layout(
+        title=title,
+        width=600,
+        height=500
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def create_performance_chart(equity_curve: pd.Series, benchmark: pd.Series = None, title: str = "Performance", save_path: str = None) -> go.Figure:
+    """
+    Crear gráfico de rendimiento
+    
+    Args:
+        equity_curve: Serie de valores del portafolio
+        benchmark: Serie de valores del benchmark (opcional)
+        title: Título del gráfico
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    fig = go.Figure()
+    
+    # Añadir curva de equity
+    fig.add_trace(go.Scatter(
+        x=equity_curve.index,
+        y=equity_curve,
+        mode='lines',
+        name='Portfolio',
+        line=dict(color='blue')
+    ))
+    
+    # Añadir benchmark si se proporciona
+    if benchmark is not None:
+        fig.add_trace(go.Scatter(
+            x=benchmark.index,
+            y=benchmark,
+            mode='lines',
+            name='Benchmark',
+            line=dict(color='red', dash='dash')
+        ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis_title='Date',
+        yaxis_title='Value',
+        hovermode='x unified'
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def create_drawdown_chart(equity_curve: pd.Series, title: str = "Drawdown", save_path: str = None) -> go.Figure:
+    """
+    Crear gráfico de drawdown
+    
+    Args:
+        equity_curve: Serie de valores del portafolio
+        title: Título del gráfico
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    # Calcular drawdown
+    peak = equity_curve.expanding().max()
+    drawdown = (equity_curve - peak) / peak * 100
+    
+    fig = go.Figure()
+    
+    # Añadir área de drawdown
+    fig.add_trace(go.Scatter(
+        x=drawdown.index,
+        y=drawdown,
+        mode='lines',
+        name='Drawdown',
+        fill='tonexty',
+        fillcolor='rgba(255, 0, 0, 0.3)',
+        line=dict(color='red')
+    ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis_title='Date',
+        yaxis_title='Drawdown (%)',
+        yaxis=dict(tickformat='.1f')
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def export_results_to_excel(data: Dict, filepath: str) -> bool:
+    """
+    Exportar resultados a Excel con múltiples hojas
+    
+    Args:
+        data: Diccionario con DataFrames a exportar
+        filepath: Ruta del archivo Excel
+    
+    Returns:
+        True si se exportó correctamente, False en caso contrario
+    """
+    try:
+        with pd.ExcelWriter(filepath) as writer:
+            for sheet_name, df in data.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+        return True
+    except Exception as e:
+        logging.error(f"Error exportando a Excel: {e}")
+        return False
+
+def format_currency(value: float, currency: str = 'USD', precision: int = 2) -> str:
+    """
+    Formatear valor como moneda
+    
+    Args:
+        value: Valor a formatear
+        currency: Código de moneda
+        precision: Número de decimales
+    
+    Returns:
+        String formateado
+    """
+    return f"{currency} {value:,.{precision}f}"
+
+def format_percentage(value: float, precision: int = 2) -> str:
+    """
+    Formatear valor como porcentaje
+    
+    Args:
+        value: Valor a formatear (como decimal, ej. 0.25 para 25%)
+        precision: Número de decimales
+    
+    Returns:
+        String formateado
+    """
+    return f"{value * 100:.{precision}f}%"
+
+def retry_on_exception(max_retries: int = 3, delay: float = 1.0, exceptions: Tuple = (Exception,)):
+    """
+    Decorador para reintentar función en caso de excepción
+    
+    Args:
+        max_retries: Número máximo de reintentos
+        delay: Tiempo de espera entre reintentos (segundos)
+        exceptions: Tupla de excepciones a capturar
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt == max_retries:
+                        raise
+                    logging.warning(f"Intento {attempt + 1} falló para {func.__name__}: {e}. Reintentando en {delay} segundos...")
+                    time.sleep(delay)
+        return wrapper
+    return decorator
+
+def validate_config(config: Dict) -> bool:
+    """
+    Validar configuración del sistema
+    
+    Args:
+        config: Diccionario de configuración
+    
+    Returns:
+        True si la configuración es válida, False en caso contrario
+    """
+    required_sections = [
+        'binance',
+        'symbols',
+        'trading',
+        'risk',
+        'model'
+    ]
+    
+    # Verificar secciones requeridas
+    for section in required_sections:
+        if section not in config:
+            logging.error(f"Falta sección requerida en configuración: {section}")
+            return False
+    
+    # Verificar símbolos
+    if not config['symbols'] or not isinstance(config['symbols'], list):
+        logging.error("La configuración debe incluir una lista de símbolos")
+        return False
+    
+    # Verificar API keys
+    if not config['binance'].get('api_key') or not config['binance'].get('api_secret'):
+        logging.error("Faltan API keys de Binance en la configuración")
+        return False
+    
+    return True
+
+def calculate_optimal_position_size(
+    account_balance: float,
+    risk_per_trade: float,
+    entry_price: float,
+    stop_loss_price: float
+) -> float:
+    """
+    Calcular tamaño óptimo de posición basado en riesgo
+    
+    Args:
+        account_balance: Balance de la cuenta
+        risk_per_trade: Riesgo por operación (como decimal, ej. 0.02 para 2%)
+        entry_price: Precio de entrada
+        stop_loss_price: Precio de stop loss
+    
+    Returns:
+        Tamaño óptimo de posición
+    """
+    risk_amount = account_balance * risk_per_trade
+    price_difference = abs(entry_price - stop_loss_price)
+    
+    if price_difference == 0:
+        return 0
+    
+    position_size = risk_amount / price_difference
+    return position_size
+
+def time_to_timestamp(time_str: str, time_format: str = '%Y-%m-%d %H:%M:%S') -> int:
+    """
+    Convertir string de tiempo a timestamp
+    
+    Args:
+        time_str: String de tiempo
+        time_format: Formato del tiempo
+    
+    Returns:
+        Timestamp en milisegundos
+    """
+    dt = datetime.strptime(time_str, time_format)
+    return int(dt.timestamp() * 1000)
+
+def timestamp_to_time(timestamp: int, time_format: str = '%Y-%m-%d %H:%M:%S') -> str:
+    """
+    Convertir timestamp a string de tiempo
+    
+    Args:
+        timestamp: Timestamp en milisegundos
+        time_format: Formato del tiempo
+    
+    Returns:
+        String de tiempo
+    """
+    dt = datetime.fromtimestamp(timestamp / 1000)
+    return dt.strftime(time_format)
+
+def get_trading_sessions(market: str = 'crypto') -> Dict[str, Dict[str, int]]:
+    """
+    Obtener sesiones de trading por mercado
+    
+    Args:
+        market: Tipo de mercado ('crypto', 'forex', 'stocks')
+    
+    Returns:
+        Diccionario con sesiones de trading
+    """
+    if market == 'crypto':
+        # Crypto opera 24/7
+        return {
+            'session_1': {'start': 0, 'end': 24},  # 24 horas
+        }
+    elif market == 'forex':
+        # Sesiones principales de Forex
+        return {
+            'sydney': {'start': 0, 'end': 9},      # 21:00 - 06:00 UTC
+            'tokyo': {'start': 23, 'end': 8},      # 23:00 - 08:00 UTC
+            'london': {'start': 7, 'end': 16},     # 08:00 - 17:00 UTC
+            'new_york': {'start': 12, 'end': 21}   # 13:00 - 22:00 UTC
+        }
+    elif market == 'stocks':
+        # Sesiones principales de acciones (EE.UU.)
+        return {
+            'pre_market': {'start': 13, 'end': 14.5},  # 04:00 - 09:30 ET
+            'regular': {'start': 14.5, 'end': 21},     # 09:30 - 16:00 ET
+            'after_hours': {'start': 21, 'end': 23}    # 16:00 - 20:00 ET
+        }
+    else:
+        raise ValueError(f"Mercado no reconocido: {market}")
+
+def is_trading_session_active(timestamp: int, market: str = 'crypto') -> bool:
+    """
+    Verificar si el mercado está en sesión activa
+    
+    Args:
+        timestamp: Timestamp en milisegundos
+        market: Tipo de mercado
+    
+    Returns:
+        True si el mercado está activo
+    """
+    if market == 'crypto':
+        return True  # Crypto opera 24/7
+    
+    dt = datetime.fromtimestamp(timestamp / 1000)
+    hour = dt.hour + dt.minute / 60
+    
+    sessions = get_trading_sessions(market)
+    
+    for session, times in sessions.items():
+        if times['start'] <= hour < times['end']:
+            return True
+    
+    return False
+
+def calculate_time_decay_weights(period: int, decay_factor: float = 0.9) -> np.ndarray:
+    """
+    Calcular pesos con decaimiento temporal
+    
+    Args:
+        period: Período de tiempo
+        decay_factor: Factor de decaimiento
+    
+    Returns:
+        Array de pesos
+    """
+    weights = np.array([decay_factor ** i for i in range(period)])
+    return weights / weights.sum()
+
+def calculate_rolling_correlation(
+    series1: pd.Series, 
+    series2: pd.Series, 
+    window: int = 30
+) -> pd.Series:
+    """
+    Calcular correlación móvil entre dos series
+    
+    Args:
+        series1: Primera serie
+        series2: Segunda serie
+        window: Ventana móvil
+    
+    Returns:
+        Serie de correlación móvil
+    """
+    return series1.rolling(window).corr(series2)
+
+def calculate_rolling_beta(
+    asset_returns: pd.Series, 
+    market_returns: pd.Series, 
+    window: int = 30
+) -> pd.Series:
+    """
+    Calcular beta móvil
+    
+    Args:
+        asset_returns: Retornos del activo
+        market_returns: Retornos del mercado
+        window: Ventana móvil
+    
+    Returns:
+        Serie de beta móvil
+    """
+    covariance = asset_returns.rolling(window).cov(market_returns)
+    market_variance = market_returns.rolling(window).var()
+    
+    return covariance / market_variance
+
+def generate_performance_report_html(
+    metrics: Dict, 
+    equity_curve: pd.Series, 
+    save_path: str = None
+) -> str:
+    """
+    Generar reporte de rendimiento en formato HTML
+    
+    Args:
+        metrics: Diccionario de métricas
+        equity_curve: Serie de valores del portafolio
+        save_path: Ruta para guardar el reporte (opcional)
+    
+    Returns:
+        HTML del reporte
+    """
+    # Crear gráficos
+    performance_fig = create_performance_chart(equity_curve)
+    drawdown_fig = create_drawdown_chart(equity_curve)
+    
+    # Generar tabla de métricas
+    metrics_html = "<table><tr><th>Métrica</th><th>Valor</th></tr>"
+    for metric, value in metrics.items():
+        if isinstance(value, float):
+            if 'ratio' in metric.lower() or 'return' in metric.lower():
+                formatted_value = format_percentage(value)
+            else:
+                formatted_value = f"{value:.4f}"
+        else:
+            formatted_value = str(value)
+        
+        metrics_html += f"<tr><td>{metric}</td><td>{formatted_value}</td></tr>"
+    metrics_html += "</table>"
+    
+    # Crear HTML completo
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Quantum Trading - Performance Report</title>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #2c3e50; }}
+            h2 {{ color: #3498db; }}
+            table {{ border-collapse: collapse; width: 50%; margin-bottom: 20px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+            .chart {{ margin-bottom: 30px; }}
+        </style>
+    </head>
+    <body>
+        <h1>Quantum Trading - Performance Report</h1>
+        <h2>Portfolio Metrics</h2>
+        {metrics_html}
+        
+        <div class="chart">
+            <h2>Performance</h2>
+            <div id="performance-chart"></div>
+        </div>
+        
+        <div class="chart">
+            <h2>Drawdown</h2>
+            <div id="drawdown-chart"></div>
+        </div>
+        
+        <script>
+            {performance_fig.to_html(include_plotlyjs=False, div_id="performance-chart")}
+            {drawdown_fig.to_html(include_plotlyjs=False, div_id="drawdown-chart")}
+        </script>
+    </body>
+    </html>
+    """
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        with open(save_path, 'w') as f:
+            f.write(html)
+    
+    return html
+
+def get_system_info() -> Dict:
+    """
+    Obtener información del sistema
+    
+    Returns:
+        Diccionario con información del sistema
+    """
+    import platform
+    import psutil
+    
+    return {
+        'platform': platform.platform(),
+        'python_version': platform.python_version(),
+        'cpu_count': psutil.cpu_count(),
+        'memory_total': psutil.virtual_memory().total,
+        'memory_available': psutil.virtual_memory().available,
+        'disk_usage': psutil.disk_usage('/').percent
+    }
+
+def log_system_info():
+    """Registrar información del sistema en el log"""
+    info = get_system_info()
+    logging.info("=== System Information ===")
+    for key, value in info.items():
+        logging.info(f"{key}: {value}")
+    logging.info("========================")
+
+def check_disk_space(min_space_gb: float = 1.0) -> bool:
+    """
+    Verificar espacio disponible en disco
+    
+    Args:
+        min_space_gb: Espacio mínimo requerido en GB
+    
+    Returns:
+        True si hay suficiente espacio
+    """
+    import psutil
+    
+    disk_usage = psutil.disk_usage('/')
+    free_space_gb = disk_usage.free / (1024 ** 3)
+    
+    if free_space_gb < min_space_gb:
+        logging.warning(f"Espacio en disco bajo: {free_space_gb:.2f} GB disponible")
+        return False
+    
+    return True
+
+def clean_old_files(directory: str, days_old: int = 30, pattern: str = "*") -> int:
+    """
+    Limpiar archivos antiguos
+    
+    Args:
+        directory: Directorio a limpiar
+        days_old: Antigüedad en días
+        pattern: Patrón de nombres de archivo
+    
+    Returns:
+        Número de archivos eliminados
+    """
+    import glob
+    from pathlib import Path
+    
+    if not os.path.exists(directory):
+        return 0
+    
+    cutoff_time = time.time() - (days_old * 86400)
+    files_removed = 0
+    
+    for file_path in Path(directory).glob(pattern):
+        if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
+            try:
+                file_path.unlink()
+                files_removed += 1
+            except Exception as e:
+                logging.error(f"Error eliminando archivo {file_path}: {e}")
+    
+    logging.info(f"Eliminados {files_removed} archivos antiguos de {directory}")
+    return files_removed
+
+def compress_file(file_path: str, remove_original: bool = False) -> str:
+    """
+    Comprimir archivo
+    
+    Args:
+        file_path: Ruta del archivo a comprimir
+        remove_original: Si se debe eliminar el archivo original
+    
+    Returns:
+        Ruta del archivo comprimido
+    """
+    import gzip
+    import shutil
+    
+    compressed_path = f"{file_path}.gz"
+    
+    with open(file_path, 'rb') as f_in:
+        with gzip.open(compressed_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    
+    if remove_original:
+        os.remove(file_path)
+    
+    return compressed_path
+
+def decompress_file(compressed_path: str, output_path: str = None) -> str:
+    """
+    Descomprimir archivo
+    
+    Args:
+        compressed_path: Ruta del archivo comprimido
+        output_path: Ruta del archivo descomprimido (opcional)
+    
+    Returns:
+        Ruta del archivo descomprimido
+    """
+    import gzip
+    import shutil
+    
+    if output_path is None:
+        output_path = compressed_path.replace('.gz', '')
+    
+    with gzip.open(compressed_path, 'rb') as f_in:
+        with open(output_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    
+    return output_path
+
+def get_data_hash(data: Union[pd.DataFrame, pd.Series, str]) -> str:
+    """
+    Calcular hash de datos para verificar integridad
+    
+    Args:
+        data: Datos a hashear
+    
+    Returns:
+        Hash de los datos
+    """
+    import hashlib
+    
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data_str = data.to_string()
+    else:
+        data_str = str(data)
+    
+    return hashlib.md5(data_str.encode()).hexdigest()
+
+def verify_data_integrity(data: Union[pd.DataFrame, pd.Series, str], expected_hash: str) -> bool:
+    """
+    Verificar integridad de datos
+    
+    Args:
+        data: Datos a verificar
+        expected_hash: Hash esperado
+    
+    Returns:
+        True si los datos son íntegros
+    """
+    actual_hash = get_data_hash(data)
+    return actual_hash == expected_hash
+
+def create_data_backup(
+    data: Union[pd.DataFrame, Dict], 
+    backup_dir: str = 'backups',
+    compress: bool = True
+) -> str:
+    """
+    Crear backup de datos
+    
+    Args:
+        data: Datos a respaldar
+        backup_dir: Directorio de backup
+        compress: Si se deben comprimir los datos
+    
+    Returns:
+        Ruta del backup
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+    
+    if isinstance(data, pd.DataFrame):
+        backup_path = os.path.join(backup_dir, f"backup_{timestamp}.csv")
+        data.to_csv(backup_path)
+    elif isinstance(data, dict):
+        backup_path = os.path.join(backup_dir, f"backup_{timestamp}.json")
+        save_json(data, backup_path)
+    else:
+        backup_path = os.path.join(backup_dir, f"backup_{timestamp}.pkl")
+        save_object(data, backup_path)
+    
+    if compress:
+        backup_path = compress_file(backup_path, remove_original=True)
+    
+    logging.info(f"Backup creado en: {backup_path}")
+    return backup_path
+
+def restore_data_backup(backup_path: str, data_type: str = 'auto') -> Union[pd.DataFrame, Dict, Any]:
+    """
+    Restaurar datos desde backup
+    
+    Args:
+        backup_path: Ruta del backup
+        data_type: Tipo de datos ('dataframe', 'dict', 'pickle', 'auto')
+    
+    Returns:
+        Datos restaurados
+    """
+    # Descomprimir si es necesario
+    if backup_path.endswith('.gz'):
+        backup_path = decompress_file(backup_path)
+    
+    # Determinar tipo de datos si es auto
+    if data_type == 'auto':
+        if backup_path.endswith('.csv'):
+            data_type = 'dataframe'
+        elif backup_path.endswith('.json'):
+            data_type = 'dict'
+        else:
+            data_type = 'pickle'
+    
+    # Restaurar según tipo
+    if data_type == 'dataframe':
+        return pd.read_csv(backup_path, index_col=0, parse_dates=True)
+    elif data_type == 'dict':
+        return load_json(backup_path)
+    else:
+        return load_object(backup_path)
+
+def schedule_task(
+    func, 
+    interval_seconds: int, 
+    max_iterations: int = None,
+    run_immediately: bool = True
+):
+    """
+    Programar ejecución periódica de una función
+    
+    Args:
+        func: Función a ejecutar
+        interval_seconds: Intervalo en segundos
+        max_iterations: Número máximo de iteraciones (None para infinito)
+        run_immediately: Si se debe ejecutar inmediatamente
+    """
+    def task_runner():
+        iteration = 0
+        if run_immediately:
+            try:
+                func()
+                iteration += 1
+            except Exception as e:
+                logging.error(f"Error en ejecución programada: {e}")
+        
+        while max_iterations is None or iteration < max_iterations:
+            time.sleep(interval_seconds)
+            try:
+                func()
+                iteration += 1
+            except Exception as e:
+                logging.error(f"Error en ejecución programada: {e}")
+    
+    import threading
+    thread = threading.Thread(target=task_runner, daemon=True)
+    thread.start()
+    
+    return thread
+
+def measure_execution_time(func):
+    """
+    Decorador para medir tiempo de ejecución
+    
+    Args:
+        func: Función a medir
+    
+    Returns:
+        Función envuelta con medición de tiempo
+    """
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        execution_time = time.time() - start_time
+        logging.info(f"{func.__name__} ejecutado en {execution_time:.4f} segundos")
+        return result
+    return wrapper
+
+def memory_usage_monitor(func):
+    """
+    Decorador para monitorear uso de memoria
+    
+    Args:
+        func: Función a monitorear
+    
+    Returns:
+        Función envuelta con monitoreo de memoria
+    """
+    def wrapper(*args, **kwargs):
+        import psutil
+        
+        process = psutil.Process()
+        mem_before = process.memory_info().rss / (1024 * 1024)  # MB
+        
+        result = func(*args, **kwargs)
+        
+        mem_after = process.memory_info().rss / (1024 * 1024)  # MB
+        mem_diff = mem_after - mem_before
+        
+        logging.info(f"{func.__name__} - Memoria: {mem_before:.2f}MB -> {mem_after:.2f}MB (diff: {mem_diff:.2f}MB)")
+        return result
+    return wrapper
+
+def send_notification(message: str, title: str = "Quantum Trading", priority: str = "normal"):
+    """
+    Enviar notificación (implementación básica)
+    
+    Args:
+        message: Mensaje de la notificación
+        title: Título de la notificación
+        priority: Prioridad ('low', 'normal', 'high')
+    """
+    try:
+        # Implementación básica - solo logging
+        logging.info(f"NOTIFICACIÓN [{priority.upper()}] {title}: {message}")
+        
+        # Aquí se podría integrar con servicios como:
+        # - Email
+        # - Telegram
+        # - Slack
+        # - Push notifications
+        
+    except Exception as e:
+        logging.error(f"Error enviando notificación: {e}")
+
+def truncate_dataframe(df: pd.DataFrame, n_rows: int = 10) -> pd.DataFrame:
+    """
+    Truncar DataFrame para visualización
+    
+    Args:
+        df: DataFrame a truncar
+        n_rows: Número de filas a mostrar
+    
+    Returns:
+        DataFrame truncado
+    """
+    if len(df) <= n_rows:
+        return df
+    
+    # Tomar primeras y últimas filas
+    head = df.head(n_rows // 2)
+    tail = df.tail(n_rows // 2)
+    
+    # Añadir fila de puntos suspensivos
+    middle_row = pd.DataFrame([['...'] * len(df.columns)], columns=df.columns)
+    
+    return pd.concat([head, middle_row, tail])
+
+def safe_division(numerator: float, denominator: float, default: float = 0.0) -> float:
+    """
+    División segura con valor por defecto
+    
+    Args:
+        numerator: Numerador
+        denominator: Denominador
+        default: Valor por defecto si denominador es 0
+    
+    Returns:
+        Resultado de la división o valor por defecto
+    """
+    if denominator == 0:
+        return default
+    return numerator / denominator
+
+def clamp(value: float, min_value: float, max_value: float) -> float:
+    """
+    Limitar valor a un rango
+    
+    Args:
+        value: Valor a limitar
+        min_value: Valor mínimo
+        max_value: Valor máximo
+    
+    Returns:
+        Valor limitado al rango
+    """
+    return max(min_value, min(value, max_value))
+
+def smooth_series(series: pd.Series, method: str = 'ewm', **kwargs) -> pd.Series:
+    """
+    Suavizar serie temporal
+    
+    Args:
+        series: Serie a suavizar
+        method: Método de suavizado ('ewm', 'rolling', 'savgol')
+        **kwargs: Argumentos adicionales según el método
+    
+    Returns:
+        Serie suavizada
+    """
+    if method == 'ewm':
+        span = kwargs.get('span', 10)
+        return series.ewm(span=span).mean()
+    elif method == 'rolling':
+        window = kwargs.get('window', 10)
+        return series.rolling(window=window).mean()
+    elif method == 'savgol':
+        from scipy.signal import savgol_filter
+        window_length = kwargs.get('window_length', 11)
+        polyorder = kwargs.get('polyorder', 3)
+        return pd.Series(savgol_filter(series, window_length, polyorder), index=series.index)
+    else:
+        raise ValueError(f"Método de suavizado no reconocido: {method}")
+
+def find_peaks(series: pd.Series, **kwargs) -> Tuple[np.ndarray, Dict]:
+    """
+    Encontrar picos en una serie
+    
+    Args:
+        series: Serie donde buscar picos
+        **kwargs: Argumentos adicionales para scipy.signal.find_peaks
+    
+    Returns:
+        Tupla con (índices de picos, propiedades)
+    """
+    from scipy.signal import find_peaks
+    
+    peaks, properties = find_peaks(series.values, **kwargs)
+    return peaks, properties
+
+def calculate_cagr(begin_value: float, end_value: float, days: int) -> float:
+    """
+    Calcular CAGR (Compound Annual Growth Rate)
+    
+    Args:
+        begin_value: Valor inicial
+        end_value: Valor final
+        days: Días transcurridos
+    
+    Returns:
+        CAGR
+    """
+    years = days / 365.25
+    return (end_value / begin_value) ** (1 / years) - 1
+
+def calculate_information_ratio(
+    portfolio_returns: pd.Series, 
+    benchmark_returns: pd.Series
+) -> float:
+    """
+    Calcular Information Ratio
+    
+    Args:
+        portfolio_returns: Retornos del portafolio
+        benchmark_returns: Retornos del benchmark
+    
+    Returns:
+        Information Ratio
+    """
+    excess_returns = portfolio_returns - benchmark_returns
+    tracking_error = excess_returns.std() * np.sqrt(252)
+    
+    if tracking_error == 0:
+        return 0
+    
+    return excess_returns.mean() * np.sqrt(252) / tracking_error
+
+def calculate_upside_capture(
+    portfolio_returns: pd.Series, 
+    benchmark_returns: pd.Series
+) -> float:
+    """
+    Calcular Upside Capture Ratio
+    
+    Args:
+        portfolio_returns: Retornos del portafolio
+        benchmark_returns: Retornos del benchmark
+    
+    Returns:
+        Upside Capture Ratio
+    """
+    upside_periods = benchmark_returns > 0
+    
+    if not upside_periods.any():
+        return 0
+    
+    portfolio_upside = portfolio_returns[upside_periods].mean()
+    benchmark_upside = benchmark_returns[upside_periods].mean()
+    
+    if benchmark_upside == 0:
+        return 0
+    
+    return portfolio_upside / benchmark_upside
+
+def calculate_downside_capture(
+    portfolio_returns: pd.Series, 
+    benchmark_returns: pd.Series
+) -> float:
+    """
+    Calcular Downside Capture Ratio
+    
+    Args:
+        portfolio_returns: Retornos del portafolio
+        benchmark_returns: Retornos del benchmark
+    
+    Returns:
+        Downside Capture Ratio
+    """
+    downside_periods = benchmark_returns < 0
+    
+    if not downside_periods.any():
+        return 0
+    
+    portfolio_downside = portfolio_returns[downside_periods].mean()
+    benchmark_downside = benchmark_returns[downside_periods].mean()
+    
+    if benchmark_downside == 0:
+        return 0
+    
+    return portfolio_downside / benchmark_downside
+
+def calculate_win_loss_ratio(winning_trades: pd.Series, losing_trades: pd.Series) -> float:
+    """
+    Calcular Win/Loss Ratio
+    
+    Args:
+        winning_trades: Serie de ganancias
+        losing_trades: Serie de pérdidas (valores positivos)
+    
+    Returns:
+        Win/Loss Ratio
+    """
+    avg_win = winning_trades.mean() if not winning_trades.empty else 0
+    avg_loss = losing_trades.mean() if not losing_trades.empty else 0
+    
+    if avg_loss == 0:
+        return float('inf') if avg_win > 0 else 0
+    
+    return avg_win / avg_loss
+
+def calculate_profit_factor(winning_trades: pd.Series, losing_trades: pd.Series) -> float:
+    """
+    Calcular Profit Factor
+    
+    Args:
+        winning_trades: Serie de ganancias
+        losing_trades: Serie de pérdidas (valores positivos)
+    
+    Returns:
+        Profit Factor
+    """
+    total_wins = winning_trades.sum() if not winning_trades.empty else 0
+    total_losses = losing_trades.sum() if not losing_trades.empty else 0
+    
+    if total_losses == 0:
+        return float('inf') if total_wins > 0 else 0
+    
+    return total_wins / total_losses
+
+def calculate_expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """
+    Calcular Expectancy (expectativa de ganancia por operación)
+    
+    Args:
+        win_rate: Tasa de aciertos (como decimal)
+        avg_win: Ganancia promedio
+        avg_loss: Pérdida promedio (valor positivo)
+    
+    Returns:
+        Expectancy
+    """
+    return (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+
+def calculate_kelly_criterion(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """
+    Calcular Kelly Criterion (porcentaje óptimo a arriesgar)
+    
+    Args:
+        win_rate: Tasa de aciertos (como decimal)
+        avg_win: Ganancia promedio
+        avg_loss: Pérdida promedio (valor positivo)
+    
+    Returns:
+        Porcentaje óptimo a arriesgar
+    """
+    win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0
+    return (win_rate * win_loss_ratio - (1 - win_rate)) / win_loss_ratio
+
+def calculate_risk_of_ruin(
+    win_rate: float, 
+    avg_win: float, 
+    avg_loss: float, 
+    capital_units: int = 100
+) -> float:
+    """
+    Calcular Risk of Ruin (probabilidad de perder todo el capital)
+    
+    Args:
+        win_rate: Tasa de aciertos (como decimal)
+        avg_win: Ganancia promedio
+        avg_loss: Pérdida promedio (valor positivo)
+        capital_units: Unidades de capital
+    
+    Returns:
+        Probabilidad de ruina
+    """
+    if win_rate <= 0 or win_rate >= 1:
+        return 1.0 if win_rate == 0 else 0.0
+    
+    win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0
+    
+    if win_loss_ratio <= 0:
+        return 1.0
+    
+    u = ((1 - win_rate) / win_rate) ** capital_units
+    v = (win_rate / (1 - win_rate)) ** capital_units
+    
+    if win_rate == 0.5:
+        return 1.0 - capital_units / (capital_units + win_loss_ratio)
+    elif win_rate < 0.5:
+        return u
+    else:
+        return (1 - v) / (1 - (win_rate / (1 - win_rate)) ** capital_units)
+
+def create_equity_curve(trades: pd.DataFrame, initial_capital: float = 10000) -> pd.Series:
+    """
+    Crear curva de equity a partir de trades
+    
+    Args:
+        trades: DataFrame con trades (columnas: timestamp, pnl)
+        initial_capital: Capital inicial
+    
+    Returns:
+        Serie de equity
+    """
+    if trades.empty:
+        return pd.Series([initial_capital], index=[pd.Timestamp.now()])
+    
+    # Asegurar que los trades estén ordenados por timestamp
+    trades = trades.sort_values('timestamp')
+    
+    # Calcular equity acumulado
+    equity_values = [initial_capital]
+    for _, trade in trades.iterrows():
+        equity_values.append(equity_values[-1] + trade['pnl'])
+    
+    # Crear serie temporal
+    equity_curve = pd.Series(equity_values[1:], index=trades['timestamp'])
+    
+    return equity_curve
+
+def analyze_trade_distribution(trades: pd.DataFrame) -> Dict:
+    """
+    Analizar distribución de trades
+    
+    Args:
+        trades: DataFrame con trades (columnas: pnl)
+    
+    Returns:
+        Diccionario con estadísticas de la distribución
+    """
+    if trades.empty or 'pnl' not in trades.columns:
+        return {}
+    
+    pnl = trades['pnl']
+    
+    # Separar ganancias y pérdidas
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0].abs()  # Convertir a positivos
+    
+    analysis = {
+        'total_trades': len(pnl),
+        'winning_trades': len(wins),
+        'losing_trades': len(losses),
+        'win_rate': len(wins) / len(pnl) if len(pnl) > 0 else 0,
+        'avg_win': wins.mean() if not wins.empty else 0,
+        'avg_loss': losses.mean() if not losses.empty else 0,
+        'largest_win': wins.max() if not wins.empty else 0,
+        'largest_loss': losses.max() if not losses.empty else 0,
+        'profit_factor': wins.sum() / losses.sum() if not losses.empty and losses.sum() > 0 else float('inf'),
+        'win_loss_ratio': wins.mean() / losses.mean() if not wins.empty and not losses.empty and losses.mean() > 0 else 0,
+        'expectancy': calculate_expectancy(len(wins) / len(pnl), wins.mean(), losses.mean()) if not wins.empty and not losses.empty else 0,
+        'std_dev': pnl.std(),
+        'skewness': pnl.skew(),
+        'kurtosis': pnl.kurtosis()
+    }
+    
+    return analysis
+
+def calculate_monthly_returns(equity_curve: pd.Series) -> pd.Series:
+    """
+    Calcular retornos mensuales
+    
+    Args:
+        equity_curve: Serie de equity
+    
+    Returns:
+        Serie de retornos mensuales
+    """
+    return equity_curve.resample('M').last().pct_change().dropna()
+
+def calculate_sector_allocation(positions: Dict, sector_mapping: Dict) -> Dict:
+    """
+    Calcular asignación por sector
+    
+    Args:
+        positions: Diccionario de posiciones
+        sector_mapping: Mapeo de símbolos a sectores
+    
+    Returns:
+        Diccionario con asignación por sector
+    """
+    sector_allocation = {}
+    
+    for symbol, position in positions.items():
+        sector = sector_mapping.get(symbol, 'Unknown')
+        value = position.get('value', 0)
+        
+        if sector not in sector_allocation:
+            sector_allocation[sector] = 0
+        
+        sector_allocation[sector] += value
+    
+    return sector_allocation
+
+def calculate_currency_exposure(positions: Dict, currency_mapping: Dict) -> Dict:
+    """
+    Calcular exposición por moneda
+    
+    Args:
+        positions: Diccionario de posiciones
+        currency_mapping: Mapeo de símbolos a monedas
+    
+    Returns:
+        Diccionario con exposición por moneda
+    """
+    currency_exposure = {}
+    
+    for symbol, position in positions.items():
+        currency = currency_mapping.get(symbol, 'USD')
+        value = position.get('value', 0)
+        
+        if currency not in currency_exposure:
+            currency_exposure[currency] = 0
+        
+        currency_exposure[currency] += value
+    
+    return currency_exposure
+
+def create_position_heatmap(positions: Dict, save_path: str = None) -> go.Figure:
+    """
+    Crear mapa de calor de posiciones
+    
+    Args:
+        positions: Diccionario de posiciones
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    if not positions:
+        return go.Figure()
+    
+    # Convertir a DataFrame
+    df = pd.DataFrame.from_dict(positions, orient='index')
+    
+    # Crear mapa de calor
+    fig = go.Figure(data=go.Heatmap(
+        z=df.values,
+        x=df.columns,
+        y=df.index,
+        colorscale='RdBu',
+        zmid=0
+    ))
+    
+    fig.update_layout(
+        title="Position Heatmap",
+        xaxis_title="Attributes",
+        yaxis_title="Symbols"
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def optimize_portfolio_weights(
+    returns: pd.DataFrame,
+    method: str = 'sharpe',
+    risk_free_rate: float = 0.0,
+    constraints: Dict = None
+) -> Dict:
+    """
+    Optimizar pesos de portafolio
+    
+    Args:
+        returns: DataFrame de retornos
+        method: Método de optimización ('sharpe', 'min_variance', 'max_return', 'risk_parity')
+        risk_free_rate: Tasa libre de riesgo
+        constraints: Restricciones adicionales
+    
+    Returns:
+        Diccionario con pesos óptimos
+    """
+    try:
+        import scipy.optimize as opt
+        
+        # Función objetivo según método
+        if method == 'sharpe':
+            def objective(weights):
+                portfolio_return = np.sum(returns.mean() * weights) * 252
+                portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+                return -portfolio_return / portfolio_volatility  # Negativo para maximizar
+        
+        elif method == 'min_variance':
+            def objective(weights):
+                return np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+        
+        elif method == 'max_return':
+            def objective(weights):
+                return -np.sum(returns.mean() * weights) * 252  # Negativo para maximizar
+        
+        elif method == 'risk_parity':
+            def objective(weights):
+                portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+                marginal_contrib = np.dot(returns.cov() * 252, weights) / portfolio_volatility
+                contrib = weights * marginal_contrib
+                return np.sum((contrib - contrib.mean()) ** 2)
+        
+        else:
+            raise ValueError(f"Método de optimización no reconocido: {method}")
+        
+        # Restricciones
+        constraints_list = [
+            {'type': 'eq', 'fun': lambda x: np.sum(x) - 1}  # Suma de pesos = 1
+        ]
+        
+        # Añadir restricciones adicionales si se proporcionan
+        if constraints:
+            constraints_list.extend(constraints)
+        
+        # Límites (pesos entre 0 y 1)
+        bounds = tuple((0, 1) for _ in range(len(returns.columns)))
+        
+        # Pesos iniciales (iguales)
+        initial_weights = np.array([1/len(returns.columns)] * len(returns.columns))
+        
+        # Optimización
+        result = opt.minimize(
+            objective,
+            initial_weights,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints_list
+        )
+        
+        if result.success:
+            weights = dict(zip(returns.columns, result.x))
+            return weights
+        else:
+            logging.error(f"Optimización fallida: {result.message}")
+            return dict(zip(returns.columns, initial_weights))
+    
+    except ImportError:
+        logging.warning("scipy no disponible, usando pesos iguales")
+        return dict(zip(returns.columns, [1/len(returns.columns)] * len(returns.columns)))
+    except Exception as e:
+        logging.error(f"Error en optimización de portafolio: {e}")
+        return dict(zip(returns.columns, [1/len(returns.columns)] * len(returns.columns)))
+
+def calculate_portfolio_var(
+    returns: pd.Series,
+    confidence_level: float = 0.05,
+    method: str = 'historical'
+) -> float:
+    """
+    Calcular Value at Risk (VaR) del portafolio
+    
+    Args:
+        returns: Serie de retornos del portafolio
+        confidence_level: Nivel de confianza (ej. 0.05 para 95% VaR)
+        method: Método de cálculo ('historical', 'parametric', 'monte_carlo')
+    
+    Returns:
+        VaR
+    """
+    if method == 'historical':
+        return returns.quantile(confidence_level)
+    
+    elif method == 'parametric':
+        mean = returns.mean()
+        std = returns.std()
+        z_score = stats.norm.ppf(confidence_level)
+        return mean + z_score * std
+    
+    elif method == 'monte_carlo':
+        n_simulations = 10000
+        simulated_returns = np.random.normal(returns.mean(), returns.std(), n_simulations)
+        return np.percentile(simulated_returns, confidence_level * 100)
+    
+    else:
+        raise ValueError(f"Método VaR no reconocido: {method}")
+
+def calculate_portfolio_cvar(
+    returns: pd.Series,
+    confidence_level: float = 0.05,
+    method: str = 'historical'
+) -> float:
+    """
+    Calcular Conditional Value at Risk (CVaR) del portafolio
+    
+    Args:
+        returns: Serie de retornos del portafolio
+        confidence_level: Nivel de confianza
+        method: Método de cálculo
+    
+    Returns:
+        CVaR
+    """
+    var = calculate_portfolio_var(returns, confidence_level, method)
+    
+    if method == 'historical':
+        return returns[returns <= var].mean()
+    
+    elif method == 'parametric':
+        mean = returns.mean()
+        std = returns.std()
+        z_score = stats.norm.ppf(confidence_level)
+        return mean - std * stats.norm.pdf(z_score) / confidence_level
+    
+    elif method == 'monte_carlo':
+        n_simulations = 10000
+        simulated_returns = np.random.normal(returns.mean(), returns.std(), n_simulations)
+        var = np.percentile(simulated_returns, confidence_level * 100)
+        return simulated_returns[simulated_returns <= var].mean()
+    
+    else:
+        raise ValueError(f"Método CVaR no reconocido: {method}")
+
+def create_risk_metrics_dashboard(
+    returns: pd.Series,
+    benchmark_returns: pd.Series = None,
+    save_path: str = None
+) -> go.Figure:
+    """
+    Crear dashboard de métricas de riesgo
+    
+    Args:
+        returns: Serie de retornos del portafolio
+        benchmark_returns: Serie de retornos del benchmark (opcional)
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly con subplots
+    """
+    # Calcular métricas
+    rolling_var = returns.rolling(30).apply(lambda x: calculate_portfolio_var(x))
+    rolling_cvar = returns.rolling(30).apply(lambda x: calculate_portfolio_cvar(x))
+    
+    # Crear subplots
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Returns Distribution', 'Rolling VaR', 'Rolling CVaR', 'Drawdown'),
+        specs=[[{"secondary_y": False}, {"secondary_y": False}],
+               [{"secondary_y": False}, {"secondary_y": False}]]
+    )
+    
+    # 1. Distribución de retornos
+    fig.add_trace(
+        go.Histogram(x=returns, nbinsx=50, name='Returns'),
+        row=1, col=1
+    )
+    
+    # 2. VaR móvil
+    fig.add_trace(
+        go.Scatter(x=rolling_var.index, y=rolling_var, name='VaR'),
+        row=1, col=2
+    )
+    
+    # 3. CVaR móvil
+    fig.add_trace(
+        go.Scatter(x=rolling_cvar.index, y=rolling_cvar, name='CVaR'),
+        row=2, col=1
+    )
+    
+    # 4. Drawdown
+    equity_curve = (1 + returns).cumprod()
+    peak = equity_curve.expanding().max()
+    drawdown = (equity_curve - peak) / peak
+    
+    fig.add_trace(
+        go.Scatter(x=drawdown.index, y=drawdown, fill='tonexty', name='Drawdown'),
+        row=2, col=2
+    )
+    
+    fig.update_layout(
+        title="Risk Metrics Dashboard",
+        height=800,
+        showlegend=False
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def create_correlation_clustering(
+    correlation_matrix: pd.DataFrame,
+    method: str = 'ward',
+    save_path: str = None
+) -> go.Figure:
+    """
+    Crear dendrograma de correlación con clustering jerárquico
+    
+    Args:
+        correlation_matrix: Matriz de correlación
+        method: Método de clustering ('ward', 'complete', 'average', 'single')
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    try:
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        from scipy.spatial.distance import squareform
+        
+        # Convertir correlación a distancia
+        distance_matrix = 1 - correlation_matrix
+        
+        # Calcular linkage
+        linkage_matrix = linkage(squareform(distance_matrix), method=method)
+        
+        # Crear dendrograma
+        fig = go.Figure()
+        
+        dendrogram(linkage_matrix, labels=correlation_matrix.columns, no_plot=True)
+        
+        # Extraer coordenadas del dendrograma
+        icoord = np.array(dendrogram(linkage_matrix, labels=correlation_matrix.columns, no_plot=True)['icoord'])
+        dcoord = np.array(dendrogram(linkage_matrix, labels=correlation_matrix.columns, no_plot=True)['dcoord'])
+        labels = correlation_matrix.columns
+        
+        # Trazar líneas del dendrograma
+        for i in range(len(icoord)):
+            x = icoord[i]
+            y = dcoord[i]
+            
+            fig.add_trace(go.Scatter(
+                x=x, y=y,
+                mode='lines',
+                line=dict(color='black', width=1),
+                hoverinfo='none',
+                showlegend=False
+            ))
+        
+        # Añadir etiquetas
+        fig.add_trace(go.Scatter(
+            x=icoord[-1], y=[0] * len(labels),
+            mode='markers+text',
+            text=labels,
+            textposition='bottom center',
+            marker=dict(size=1, color='white'),
+            showlegend=False
+        ))
+        
+        fig.update_layout(
+            title=f"Correlation Clustering ({method} method)",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(title='Distance')
+        )
+        
+        # Guardar si se proporciona ruta
+        if save_path:
+            fig.write_html(save_path)
+        
+        return fig
+    
+    except ImportError:
+        logging.warning("scipy no disponible para clustering")
+        return create_correlation_heatmap(correlation_matrix, save_path)
+    except Exception as e:
+        logging.error(f"Error creando clustering de correlación: {e}")
+        return create_correlation_heatmap(correlation_matrix, save_path)
+
+def create_performance_attribution(
+    portfolio_returns: pd.Series,
+    factor_returns: pd.DataFrame,
+    save_path: str = None
+) -> go.Figure:
+    """
+    Crear gráfico de atribución de rendimiento
+    
+    Args:
+        portfolio_returns: Serie de retornos del portafolio
+        factor_returns: DataFrame de retornos de factores
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    try:
+        from sklearn.linear_model import LinearRegression
+        
+        # Alinear fechas
+        aligned_data = pd.concat([portfolio_returns, factor_returns], axis=1).dropna()
+        y = aligned_data.iloc[:, 0]
+        X = aligned_data.iloc[:, 1:]
+        
+        # Ajustar modelo
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Crear DataFrame de atribución
+        attribution = pd.DataFrame({
+            'Factor': X.columns,
+            'Contribution': model.coef_,
+            'Importance': np.abs(model.coef_)
+        })
+        
+        # Ordenar por importancia
+        attribution = attribution.sort_values('Importance', ascending=False)
+        
+        # Crear gráfico
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=('Factor Contributions', 'Factor Importance'),
+            specs=[[{"type": "bar"}, {"type": "bar"}]]
+        )
+        
+        # Contribuciones
+        colors = ['green' if x > 0 else 'red' for x in attribution['Contribution']]
+        fig.add_trace(
+            go.Bar(
+                x=attribution['Factor'],
+                y=attribution['Contribution'],
+                marker_color=colors,
+                name='Contribution'
+            ),
+            row=1, col=1
+        )
+        
+        # Importancia
+        fig.add_trace(
+            go.Bar(
+                x=attribution['Factor'],
+                y=attribution['Importance'],
+                marker_color='blue',
+                name='Importance'
+            ),
+            row=1, col=2
+        )
+        
+        fig.update_layout(
+            title="Performance Attribution",
+            height=500,
+            showlegend=False
+        )
+        
+        # Guardar si se proporciona ruta
+        if save_path:
+            fig.write_html(save_path)
+        
+        return fig
+    
+    except ImportError:
+        logging.warning("scikit-learn no disponible para atribución")
+        return go.Figure()
+    except Exception as e:
+        logging.error(f"Error creando atribución de rendimiento: {e}")
+        return go.Figure()
+
+def create_rolling_performance_chart(
+    returns: pd.Series,
+    window: int = 252,
+    save_path: str = None
+) -> go.Figure:
+    """
+    Crear gráfico de rendimiento móvil
+    
+    Args:
+        returns: Serie de retornos
+        window: Ventana móvil
+        save_path: Ruta para guardar el gráfico (opcional)
+    
+    Returns:
+        Figura de Plotly
+    """
+    # Calcular métricas móviles
+    rolling_return = returns.rolling(window).sum()
+    rolling_volatility = returns.rolling(window).std() * np.sqrt(252)
+    rolling_sharpe = rolling_return / rolling_volatility
+    
+    # Crear figura con subplots
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=('Rolling Return', 'Rolling Volatility', 'Rolling Sharpe'),
+        shared_xaxes=True,
+        vertical_spacing=0.05
+    )
+    
+    # Retorno móvil
+    fig.add_trace(
+        go.Scatter(x=rolling_return.index, y=rolling_return, name='Return'),
+        row=1, col=1
+    )
+    
+    # Volatilidad móvil
+    fig.add_trace(
+        go.Scatter(x=rolling_volatility.index, y=rolling_volatility, name='Volatility'),
+        row=2, col=1
+    )
+    
+    # Sharpe móvil
+    fig.add_trace(
+        go.Scatter(x=rolling_sharpe.index, y=rolling_sharpe, name='Sharpe'),
+        row=3, col=1
+    )
+    
+    fig.update_layout(
+        title=f"Rolling Performance ({window} periods)",
+        height=800,
+        showlegend=False
+    )
+    
+    # Guardar si se proporciona ruta
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+def export_to_pdf_report(
+    metrics: Dict,
+    equity_curve: pd.Series,
+    returns: pd.Series,
+    save_path: str = None
+) -> str:
+    """
+    Exportar reporte completo en PDF
+    
+    Args:
+        metrics: Diccionario de métricas
+        equity_curve: Serie de equity
+        returns: Serie de retornos
+        save_path: Ruta para guardar el PDF (opcional)
+    
+    Returns:
+        Ruta del PDF generado
+    """
+    try:
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.lib import colors
+        import io
+        import base64
+        
+        # Crear gráficos temporales
+        performance_fig = create_performance_chart(equity_curve)
+        drawdown_fig = create_drawdown_chart(equity_curve)
+        
+        # Convertir gráficos a imágenes
+        performance_img = fig_to_image(performance_fig)
+        drawdown_img = fig_to_image(drawdown_fig)
+        
+        # Configurar documento
+        if save_path is None:
+            save_path = f"reports/quantum_trading_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        
+        doc = SimpleDocTemplate(save_path, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Título
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            spaceAfter=30,
+            alignment=1  # Centrado
+        )
+        story.append(Paragraph("Quantum Trading - Performance Report", title_style))
+        story.append(Spacer(1, 12))
+        
+        # Fecha del reporte
+        date_style = ParagraphStyle(
+            'CustomDate',
+            parent=styles['Normal'],
+            fontSize=12,
+            alignment=1  # Centrado
+        )
+        story.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
+        story.append(Spacer(1, 20))
+        
+        # Métricas principales
+        story.append(Paragraph("Portfolio Metrics", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        
+        # Crear tabla de métricas
+        metrics_data = []
+        for metric, value in metrics.items():
+            if isinstance(value, float):
+                if 'ratio' in metric.lower() or 'return' in metric.lower():
+                    formatted_value = format_percentage(value)
+                else:
+                    formatted_value = f"{value:.4f}"
+            else:
+                formatted_value = str(value)
+            
+            metrics_data.append([metric, formatted_value])
+        
+        metrics_table = Table(metrics_data, colWidths=[3*inch, 2*inch])
+        metrics_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), ('LEFT', 'CENTER')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        
+        story.append(metrics_table)
+        story.append(Spacer(1, 20))
+        
+        # Gráfico de rendimiento
+        story.append(Paragraph("Performance Chart", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        story.append(Image(performance_img, width=6*inch, height=3*inch))
+        story.append(Spacer(1, 20))
+        
+        # Gráfico de drawdown
+        story.append(Paragraph("Drawdown Chart", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        story.append(Image(drawdown_img, width=6*inch, height=3*inch))
+        story.append(Spacer(1, 20))
+        
+        # Generar PDF
+        doc.build(story)
+        
+        logging.info(f"Reporte PDF generado en: {save_path}")
+        return save_path
+    
+    except ImportError:
+        logging.warning("reportlab no disponible para generar PDF")
+        return ""
+    except Exception as e:
+        logging.error(f"Error generando reporte PDF: {e}")
+        return ""
+
+def fig_to_image(fig, format='png', width=800, height=400):
+    """
+    Convertir figura de Plotly a imagen
+    
+    Args:
+        fig: Figura de Plotly
+        format: Formato de imagen ('png', 'jpg', 'svg')
+        width: Ancho de la imagen
+        height: Alto de la imagen
+    
+    Returns:
+        Imagen en formato bytes
+    """
+    try:
+        img_bytes = fig.to_image(format=format, width=width, height=height)
+        return io.BytesIO(img_bytes)
+    except Exception as e:
+        logging.error(f"Error convirtiendo figura a imagen: {e}")
+        return io.BytesIO()
+
+def run_system_diagnostics() -> Dict:
+    """
+    Ejecuar diagnóstico completo del sistema
+    
+    Returns:
+        Diccionario con resultados del diagnóstico
+    """
+    diagnostics = {
+        'timestamp': datetime.now().isoformat(),
+        'system_info': get_system_info(),
+        'disk_space': check_disk_space(),
+        'directories': {},
+        'dependencies': {},
+        'performance': {}
+    }
+    
+    # Verificar directorios
+    required_dirs = ['logs', 'data', 'models', 'backtests', 'reports']
+    for directory in required_dirs:
+        diagnostics['directories'][directory] = os.path.exists(directory)
+    
+    # Verificar dependencias
+    required_packages = [
+        'pandas', 'numpy', 'matplotlib', 'seaborn', 'plotly',
+        'scikit-learn', 'scipy', 'ccxt', 'yaml'
+    ]
+    
+    for package in required_packages:
+        try:
+            __import__(package)
+            diagnostics['dependencies'][package] = True
+        except ImportError:
+            diagnostics['dependencies'][package] = False
+    
+    # Pruebas de rendimiento
+    try:
+        # Prueba de cálculo de métricas
+        test_returns = pd.Series(np.random.normal(0, 0.01, 1000))
+        start_time = time.time()
+        _ = calculate_portfolio_metrics(test_returns)
+        diagnostics['performance']['metrics_calculation'] = time.time() - start_time
+        
+        # Prueba de visualización
+        start_time = time.time()
+        _ = create_performance_chart((1 + test_returns).cumprod())
+        diagnostics['performance']['chart_creation'] = time.time() - start_time
+        
+    except Exception as e:
+        diagnostics['performance']['error'] = str(e)
+    
+    return diagnostics
+
+def generate_system_report(save_path: str = None) -> str:
+    """
+    Generar reporte completo del sistema
+    
+    Args:
+        save_path: Ruta para guardar el reporte (opcional)
+    
+    Returns:
+        Ruta del reporte generado
+    """
+    if save_path is None:
+        save_path = f"reports/system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    
+    # Ejecutar diagnóstico
+    diagnostics = run_system_diagnostics()
+    
+    # Crear HTML del reporte
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Quantum Trading - System Report</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #2c3e50; }}
+            h2 {{ color: #3498db; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+            .status-ok {{ color: green; }}
+            .status-error {{ color: red; }}
+        </style>
+    </head>
+    <body>
+        <h1>Quantum Trading - System Report</h1>
+        <p>Generated on {diagnostics['timestamp']}</p>
+        
+        <h2>System Information</h2>
+        <table>
+            <tr><th>Property</th><th>Value</th></tr>
+            <tr><td>Platform</td><td>{diagnostics['system_info']['platform']}</td></tr>
+            <tr><td>Python Version</td><td>{diagnostics['system_info']['python_version']}</td></tr>
+            <tr><td>CPU Count</td><td>{diagnostics['system_info']['cpu_count']}</td></tr>
+            <tr><td>Memory Total</td><td>{diagnostics['system_info']['memory_total'] / (1024**3):.2f} GB</td></tr>
+            <tr><td>Memory Available</td><td>{diagnostics['system_info']['memory_available'] / (1024**3):.2f} GB</td></tr>
+            <tr><td>Disk Usage</td><td>{diagnostics['system_info']['disk_usage']:.1f}%</td></tr>
+        </table>
+        
+        <h2>Directory Status</h2>
+        <table>
+            <tr><th>Directory</th><th>Status</th></tr>
+    """
+    
+    for directory, status in diagnostics['directories'].items():
+        status_class = "status-ok" if status else "status-error"
+        status_text = "Exists" if status else "Missing"
+        html += f"<tr><td>{directory}</td><td class='{status_class}'>{status_text}</td></tr>"
+    
+    html += """
+        </table>
+        
+        <h2>Dependencies</h2>
+        <table>
+            <tr><th>Package</th><th>Status</th></tr>
+    """
+    
+    for package, status in diagnostics['dependencies'].items():
+        status_class = "status-ok" if status else "status-error"
+        status_text = "Installed" if status else "Missing"
+        html += f"<tr><td>{package}</td><td class='{status_class}'>{status_text}</td></tr>"
+    
+    html += """
+        </table>
+        
+        <h2>Performance Tests</h2>
+        <table>
+            <tr><th>Test</th><th>Time (seconds)</th></tr>
+    """
+    
+    for test, time_taken in diagnostics['performance'].items():
+        if test != 'error':
+            html += f"<tr><td>{test}</td><td>{time_taken:.4f}</td></tr>"
+        else:
+            html += f"<tr><td>Error</td><td>{time_taken}</td></tr>"
+    
+    html += """
+        </table>
+    </body>
+    </html>
+    """
+    
+    # Guardar reporte
+    with open(save_path, 'w') as f:
+        f.write(html)
+    
+    logging.info(f"Reporte del sistema generado en: {save_path}")
+    return save_path

@@ -1,0 +1,123 @@
+6. Optimización de la Ejecución con Market Microstructure
+
+class ExecutionOptimizer:
+    def __init__(self):
+        self.execution_history = []
+        self.market_impact_model = None
+    
+    def optimize_execution_timing(self, signal, market_data):
+        """Optimizar el momento de ejecución basado en microestructura"""
+        
+        # Análisis de liquidez
+        liquidity_score = self.calculate_liquidity_score(market_data)
+        
+        # Análisis de volatilidad intradía
+        volatility_pattern = self.analyze_intraday_volatility(market_data)
+        
+        # Análisis de spread
+        spread_analysis = self.analyze_spread_dynamics(market_data)
+        
+        # Determinar momento óptimo de ejecución
+        execution_score = (
+            0.4 * liquidity_score +
+            0.3 * (1 - volatility_pattern) +  # Menor volatilidad = mejor ejecución
+            0.3 * (1 - spread_analysis)        # Menor spread = mejor ejecución
+        )
+        
+        return execution_score
+    
+    def calculate_liquidity_score(self, market_data):
+        """Calcular score de liquidez"""
+        if 'volume' not in market_data.columns:
+            return 0.5
+        
+        # Volumen relativo
+        volume_sma = market_data['volume'].rolling(20).mean()
+        volume_ratio = market_data['volume'] / volume_sma
+        
+        # Profundidad de mercado (estimada)
+        price_range = market_data['high'] - market_data['low']
+        depth_estimate = market_data['volume'] / (price_range + 1e-10)
+        
+        # Score de liquidez combinado
+        liquidity_score = 0.5 * np.clip(volume_ratio, 0, 2) / 2 + 0.5 * np.tanh(depth_estimate / 10000)
+        
+        return liquidity_score.iloc[-1] if len(liquidity_score) > 0 else 0.5
+    
+    def analyze_intraday_volatility(self, market_data):
+        """Analizar patrón de volatilidad intradía"""
+        if len(market_data) < 24:  # Necesitamos al menos 24 horas
+            return 0.5
+        
+        # Calcular volatilidad por hora
+        market_data['hour'] = market_data.index.hour
+        hourly_volatility = market_data.groupby('hour')['close'].pct_change().std()
+        
+        # Normalizar a 0-1
+        current_hour = market_data.index[-1].hour
+        current_volatility = hourly_volatility.get(current_hour, 0.02)
+        
+        max_volatility = hourly_volatility.max()
+        min_volatility = hourly_volatility.min()
+        
+        if max_volatility > min_volatility:
+            normalized_volatility = (current_volatility - min_volatility) / (max_volatility - min_volatility)
+        else:
+            normalized_volatility = 0.5
+        
+        return normalized_volatility
+    
+    def analyze_spread_dynamics(self, market_data):
+        """Analizar dinámica del spread (estimado)"""
+        if len(market_data) < 10:
+            return 0.5
+        
+        # Estimar spread usando high-low
+        estimated_spread = (market_data['high'] - market_data['low']) / market_data['close']
+        
+        # Calcular tendencia del spread
+        spread_trend = estimated_spread.diff().rolling(5).mean()
+        
+        # Normalizar score
+        current_spread = estimated_spread.iloc[-1]
+        spread_trend_current = spread_trend.iloc[-1]
+        
+        # Score: menor spread y tendencia decreciente = mejor
+        spread_score = 0.7 * (1 - np.clip(current_spread * 100, 0, 1)) + 0.3 * (1 - np.clip(spread_trend_current * 100 + 0.5, 0, 1))
+        
+        return spread_score
+    
+    def adaptive_order_sizing(self, base_size, market_conditions):
+        """Tamaño de orden adaptativo según condiciones del mercado"""
+        
+        # Factores de ajuste
+        liquidity_factor = market_conditions.get('liquidity_score', 0.5)
+        volatility_factor = market_conditions.get('volatility_score', 0.5)
+        spread_factor = market_conditions.get('spread_score', 0.5)
+        
+        # Calcular factor de ajuste total
+        adjustment_factor = (
+            0.4 * liquidity_factor +
+            0.3 * (1 - volatility_factor) +
+            0.3 * spread_factor
+        )
+        
+        # Ajustar tamaño de orden
+        adjusted_size = base_size * (0.5 + adjustment_factor)  # Rango: 0.5x a 1.5x
+        
+        return adjusted_size
+    
+    def minimize_market_impact(self, order_size, available_liquidity):
+        """Minimizar impacto de mercado dividiendo órdenes grandes"""
+        
+        # Si la orden es pequeña respecto a la liquidez, ejecutar completa
+        if order_size < available_liquidity * 0.1:  # Menos del 10% de la liquidez
+            return [order_size]
+        
+        # Dividir orden grande en partes más pequeñas
+        max_slice_size = available_liquidity * 0.05  # 5% de la liquidez por slice
+        num_slices = int(np.ceil(order_size / max_slice_size))
+        
+        slice_sizes = [order_size / num_slices] * num_slices
+        
+        return slice_sizes

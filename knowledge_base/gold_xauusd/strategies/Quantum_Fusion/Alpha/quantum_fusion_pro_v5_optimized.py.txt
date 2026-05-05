@@ -1,0 +1,898 @@
+quantum_fusion_pro_v5_optimized.py - Estrategia ultra-optimizada para máximo win rate y rentabilidad
+
+Mejoras implementadas:
+- Win rate target: 75-85%
+- Sharpe ratio target: >2.5
+- Drawdown máximo: <8%
+- ROI anualizado target: >150%
+"""
+
+import os
+import math
+import time
+import json
+import asyncio
+import logging
+import warnings
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Tuple, Optional
+from datetime import datetime, timedelta
+from functools import lru_cache
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+import pandas as pd
+
+# ML libs
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
+from sklearn.feature_selection import RFE, SelectFromModel, RFECV
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.metrics import roc_auc_score, precision_recall_curve
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.ensemble import VotingClassifier
+from sklearn.svm import SVC
+import joblib
+
+# Optional models
+try:
+    import xgboost as xgb
+except:
+    xgb = None
+try:
+    import lightgbm as lgb
+except:
+    lgb = None
+
+# Optional TA-Lib
+try:
+    import talib
+except:
+    talib = None
+
+# ccxt for exchange connectivity
+try:
+    import ccxt
+except:
+    ccxt = None
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
+
+# =========================
+# 1. ProConfig ULTRA-OPTIMIZED
+# =========================
+@dataclass
+class ProConfigV5:
+    initial_capital: float = 100_000.0
+    max_positions: int = 6  # Reducido para mayor selectividad
+    max_leverage: float = 3.0  # Reducido para menor riesgo
+    min_confidence: float = 0.92  # Incrementado para mayor selectividad
+    risk_per_trade_pct_min: float = 0.3
+    risk_per_trade_pct_max: float = 2.2
+    risk_per_trade_pct_default: float = 1.2
+    
+    # PARES ULTRA-SELECCIONADOS (mayor liquidez y mejores patrones)
+    top_pairs: List[str] = field(default_factory=lambda: [
+        "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", 
+        "ADA/USDT", "AVAX/USDT", "MATIC/USDT", "DOT/USDT",
+        "LINK/USDT", "UNI/USDT", "ATOM/USDT", "NEAR/USDT"
+    ])
+    
+    # TIMEFRAMES OPTIMIZADOS (mejor relación señal/ruido)
+    timeframes: List[str] = field(default_factory=lambda: ["3m","5m","15m","30m","1h","2h","4h","12h","1d"])
+    
+    # ESTRATEGIAS REBALANCEADAS para máximo win rate
+    allocation_by_strategy: Dict[str, float] = field(default_factory=lambda: {
+        "ml_ensemble": 0.35,      # ML tiene mejor win rate
+        "trend_confluence": 0.25, # Trend con confluencias
+        "momentum_filtered": 0.20, # Momentum con filtros estrictos
+        "breakout_volume": 0.12,   # Breakouts con confirmación de volumen
+        "mean_reversion_precise": 0.08  # Mean reversion muy selectivo
+    })
+    
+    # PARÁMETROS DE RIESGO ULTRA-CONSERVADORES
+    risk_params_by_strategy: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "ml_ensemble": {"sl_atr": 1.2, "tp_atr": 4.5, "leverage": 2.5},
+        "trend_confluence": {"sl_atr": 1.5, "tp_atr": 5.0, "leverage": 3.0},
+        "momentum_filtered": {"sl_atr": 1.0, "tp_atr": 3.8, "leverage": 2.5},
+        "breakout_volume": {"sl_atr": 0.8, "tp_atr": 4.2, "leverage": 2.8},
+        "mean_reversion_precise": {"sl_atr": 0.6, "tp_atr": 2.2, "leverage": 2.0}
+    })
+    
+    # PESOS DE INDICADORES ULTRA-OPTIMIZADOS
+    indicator_weights_by_strategy: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "ml_ensemble": {
+            "ml_confidence": 0.45, "volume_conf": 0.20, "regime_fit": 0.15,
+            "multi_tf_align": 0.10, "volatility_adj": 0.10
+        },
+        "trend_confluence": {
+            "ema_alignment": 0.30, "adx_strength": 0.25, "macd_momentum": 0.20,
+            "volume_trend": 0.15, "support_resistance": 0.10
+        },
+        "momentum_filtered": {
+            "rsi_divergence": 0.25, "stoch_alignment": 0.20, "momentum_acc": 0.20,
+            "volume_momentum": 0.15, "price_velocity": 0.20
+        },
+        "breakout_volume": {
+            "volume_breakout": 0.35, "volatility_expansion": 0.25, "range_breakout": 0.20,
+            "momentum_confirmation": 0.15, "false_breakout_filter": 0.05
+        },
+        "mean_reversion_precise": {
+            "overbought_oversold": 0.35, "mean_reversion_signals": 0.30,
+            "support_resistance_bounce": 0.20, "volatility_contraction": 0.15
+        }
+    })
+    
+    # PARÁMETROS ESPECÍFICOS POR PAR (optimizados)
+    pair_specific_params: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+        "BTC/USDT": {"min_volume_24h": 1e9, "volatility_threshold": 0.03, "correlation_weight": 1.0},
+        "ETH/USDT": {"min_volume_24h": 8e8, "volatility_threshold": 0.035, "correlation_weight": 0.9},
+        "BNB/USDT": {"min_volume_24h": 2e8, "volatility_threshold": 0.04, "correlation_weight": 0.7},
+        "SOL/USDT": {"min_volume_24h": 5e8, "volatility_threshold": 0.05, "correlation_weight": 0.6},
+    })
+    
+    fee_pct: float = 0.0005  # Optimizado para Binance VIP
+    expected_slippage_pct: float = 0.0008
+    vol_target: float = 0.015  # Reducido para menor riesgo
+    
+    # COOLDOWN SYSTEM MÁS AGRESIVO
+    cooldown_losses_threshold: int = 2  # Más estricto
+    cooldown_seconds_base: int = 45*60  # 45 minutos base
+    max_exposure_pct: float = 0.18  # Reducido
+    max_positions_per_pair: int = 1  # Más conservador
+    max_positions_per_strategy: int = 2
+    
+    model_dir: str = "./models_v5_optimized"
+    save_trades_csv: str = "./qfp_v5_trades.csv"
+    backtest_output_dir: str = "./backtest_v5"
+    
+    # PROFIT TAKING OPTIMIZADO
+    partial_exit_threshold: float = 2.0  # Primera salida parcial a 2R
+    trailing_stop_threshold: float = 2.5  # Trailing stop a 2.5R
+    scale_out_levels: List[float] = field(default_factory=lambda: [2.0, 3.5, 5.0])  # Múltiples salidas
+    scale_out_percentages: List[float] = field(default_factory=lambda: [0.4, 0.35, 0.25])
+    
+    # MARKET REGIME ADJUSTMENTS MEJORADOS
+    regime_risk_adjustment: Dict[str, float] = field(default_factory=lambda: {
+        "bull_strong": 1.3,
+        "bull_moderate": 1.1,
+        "bear_strong": 0.4,
+        "bear_moderate": 0.6,
+        "sideways_tight": 0.7,
+        "sideways_wide": 0.9,
+        "volatile_up": 0.8,
+        "volatile_down": 0.5,
+        "trending_up": 1.2,
+        "trending_down": 0.6
+    })
+    
+    # CONFIRMACIÓN MULTI-TIMEFRAME
+    required_confirmations: int = 4  # Requiere 4+ confirmaciones
+    min_timeframes_aligned: int = 3  # Mínimo 3 timeframes alineados
+
+# =========================
+# 2. DATA CACHE SYSTEM
+# =========================
+class DataCache:
+    def __init__(self, max_size: int = 2000):
+        self.cache = {}
+        self.access_times = {}
+        self.max_size = max_size
+        
+    def _make_key(self, pair: str, timeframe: str, since: int) -> str:
+        return f"{pair}_{timeframe}_{since//60000}"  # Round to minutes
+    
+    def get(self, pair: str, timeframe: str, since: int) -> Optional[pd.DataFrame]:
+        key = self._make_key(pair, timeframe, since)
+        if key in self.cache:
+            self.access_times[key] = time.time()
+            return self.cache[key].copy()
+        return None
+    
+    def set(self, pair: str, timeframe: str, since: int, data: pd.DataFrame):
+        key = self._make_key(pair, timeframe, since)
+        
+        # Clean old entries if needed
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
+            del self.cache[oldest_key]
+            del self.access_times[oldest_key]
+            
+        self.cache[key] = data.copy()
+        self.access_times[key] = time.time()
+
+# =========================
+# 3. ADVANCED INDICATORS V5
+# =========================
+class AdvancedIndicatorsV5:
+    def __init__(self):
+        self.talib = talib is not None
+
+    def _arr(self, s): 
+        return np.asarray(s, dtype=float)
+
+    # Core indicators (optimized)
+    def ema(self, series: pd.Series, timeperiod: int):
+        if self.talib:
+            return pd.Series(talib.EMA(self._arr(series), timeperiod), index=series.index)
+        return series.ewm(span=timeperiod, adjust=False).mean()
+
+    def sma(self, series: pd.Series, timeperiod: int):
+        return series.rolling(timeperiod, min_periods=max(1, timeperiod//2)).mean()
+
+    def rsi(self, series: pd.Series, timeperiod: int = 14):
+        if self.talib:
+            return pd.Series(talib.RSI(self._arr(series), timeperiod), index=series.index)
+        
+        delta = series.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(timeperiod).mean()
+        avg_loss = loss.rolling(timeperiod).mean()
+        rs = avg_gain / (avg_loss + 1e-10)
+        return 100 - (100 / (1 + rs))
+
+    def atr(self, high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14):
+        if self.talib:
+            return pd.Series(talib.ATR(self._arr(high), self._arr(low), self._arr(close), timeperiod), index=close.index)
+        
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr.rolling(timeperiod).mean()
+
+    def macd(self, series: pd.Series, fast=12, slow=26, signal=9):
+        if self.talib:
+            macd, sig, hist = talib.MACD(self._arr(series), fast, slow, signal)
+            return pd.Series(macd, index=series.index), pd.Series(sig, index=series.index), pd.Series(hist, index=series.index)
+        
+        ema_fast = self.ema(series, fast)
+        ema_slow = self.ema(series, slow)
+        macd = ema_fast - ema_slow
+        signal_line = self.ema(macd, signal)
+        hist = macd - signal_line
+        return macd, signal_line, hist
+
+    def adx(self, high: pd.Series, low: pd.Series, close: pd.Series, timeperiod=14):
+        if self.talib:
+            return pd.Series(talib.ADX(self._arr(high), self._arr(low), self._arr(close), timeperiod), index=close.index)
+        
+        # Simplified ADX calculation
+        plus_dm = high.diff()
+        minus_dm = -low.diff()
+        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+        
+        atr = self.atr(high, low, close, timeperiod)
+        plus_di = 100 * (plus_dm.rolling(timeperiod).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(timeperiod).mean() / atr)
+        
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+        adx = dx.rolling(timeperiod).mean()
+        return adx.fillna(0)
+
+    def bollinger_bands(self, close: pd.Series, timeperiod=20, nbdev=2):
+        ma = self.sma(close, timeperiod)
+        sd = close.rolling(timeperiod).std()
+        upper = ma + nbdev * sd
+        lower = ma - nbdev * sd
+        return ma, upper, lower
+
+    def stochastic(self, high: pd.Series, low: pd.Series, close: pd.Series, k_period=14, d_period=3):
+        lowest = low.rolling(k_period).min()
+        highest = high.rolling(k_period).max()
+        k = 100 * (close - lowest) / (highest - lowest + 1e-10)
+        d = k.rolling(d_period).mean()
+        return k, d
+
+    # ADVANCED INDICATORS V5
+    def supertrend(self, high: pd.Series, low: pd.Series, close: pd.Series, period=10, multiplier=3.0):
+        """SuperTrend indicator - excelente para trend following"""
+        atr = self.atr(high, low, close, period)
+        hl2 = (high + low) / 2
+        
+        upper_band = hl2 + (multiplier * atr)
+        lower_band = hl2 - (multiplier * atr)
+        
+        supertrend = pd.Series(index=close.index, dtype=float)
+        trend = pd.Series(index=close.index, dtype=int)
+        
+        supertrend.iloc[0] = upper_band.iloc[0]
+        trend.iloc[0] = 1
+        
+        for i in range(1, len(close)):
+            if close.iloc[i] <= supertrend.iloc[i-1]:
+                supertrend.iloc[i] = upper_band.iloc[i]
+                trend.iloc[i] = 1
+            else:
+                supertrend.iloc[i] = lower_band.iloc[i]
+                trend.iloc[i] = -1
+        
+        return supertrend, trend
+
+    def ichimoku(self, high: pd.Series, low: pd.Series, close: pd.Series):
+        """Ichimoku Cloud - excelente para confirmaciones"""
+        # Tenkan-sen (9-period)
+        tenkan_sen = (high.rolling(9).max() + low.rolling(9).min()) / 2
+        
+        # Kijun-sen (26-period)
+        kijun_sen = (high.rolling(26).max() + low.rolling(26).min()) / 2
+        
+        # Senkou Span A
+        senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
+        
+        # Senkou Span B (52-period)
+        senkou_span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
+        
+        # Chikou Span
+        chikou_span = close.shift(-26)
+        
+        return {
+            'tenkan_sen': tenkan_sen,
+            'kijun_sen': kijun_sen,
+            'senkou_span_a': senkou_span_a,
+            'senkou_span_b': senkou_span_b,
+            'chikou_span': chikou_span
+        }
+
+    def vwap_bands(self, high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, period=20):
+        """VWAP with bands - excelente para institucional levels"""
+        typical_price = (high + low + close) / 3
+        
+        vwap = (typical_price * volume).rolling(period).sum() / volume.rolling(period).sum()
+        
+        # Calculate VWAP standard deviation
+        squared_diff = ((typical_price - vwap) ** 2) * volume
+        variance = squared_diff.rolling(period).sum() / volume.rolling(period).sum()
+        std_dev = np.sqrt(variance)
+        
+        upper_band = vwap + 2 * std_dev
+        lower_band = vwap - 2 * std_dev
+        
+        return vwap, upper_band, lower_band
+
+    def market_structure(self, high: pd.Series, low: pd.Series, close: pd.Series, swing_length=5):
+        """Market Structure - Higher Highs/Lower Lows"""
+        # Find swing highs and lows
+        swing_highs = high.rolling(swing_length*2+1, center=True).max() == high
+        swing_lows = low.rolling(swing_length*2+1, center=True).min() == low
+        
+        # Create structure series
+        structure = pd.Series(0, index=close.index)  # 0 = neutral
+        
+        recent_highs = []
+        recent_lows = []
+        
+        for i in range(len(close)):
+            if swing_highs.iloc[i]:
+                recent_highs.append(high.iloc[i])
+                if len(recent_highs) > 2:
+                    recent_highs.pop(0)
+                    
+            if swing_lows.iloc[i]:
+                recent_lows.append(low.iloc[i])
+                if len(recent_lows) > 2:
+                    recent_lows.pop(0)
+            
+            # Determine structure
+            if len(recent_highs) >= 2 and len(recent_lows) >= 2:
+                if recent_highs[-1] > recent_highs[-2] and recent_lows[-1] > recent_lows[-2]:
+                    structure.iloc[i] = 1  # Uptrend
+                elif recent_highs[-1] < recent_highs[-2] and recent_lows[-1] < recent_lows[-2]:
+                    structure.iloc[i] = -1  # Downtrend
+        
+        return structure
+
+    def volume_profile(self, close: pd.Series, volume: pd.Series, bins=20, period=50):
+        """Volume Profile - encuentra niveles importantes"""
+        volume_profile = pd.Series(0.0, index=close.index)
+        
+        for i in range(period, len(close)):
+            window_close = close.iloc[i-period:i]
+            window_volume = volume.iloc[i-period:i]
+            
+            # Create price bins
+            price_min, price_max = window_close.min(), window_close.max()
+            bin_size = (price_max - price_min) / bins
+            
+            # Calculate volume for current price level
+            current_price = close.iloc[i]
+            current_bin = int((current_price - price_min) / (bin_size + 1e-10))
+            current_bin = max(0, min(bins-1, current_bin))
+            
+            # Volume weight for this price level
+            bin_volume = 0
+            for j in range(len(window_close)):
+                price_bin = int((window_close.iloc[j] - price_min) / (bin_size + 1e-10))
+                price_bin = max(0, min(bins-1, price_bin))
+                if price_bin == current_bin:
+                    bin_volume += window_volume.iloc[j]
+            
+            volume_profile.iloc[i] = bin_volume / window_volume.sum() if window_volume.sum() > 0 else 0
+        
+        return volume_profile
+
+    def build_ultra_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ultra-advanced feature engineering for maximum predictive power"""
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        volume = df['volume']
+        open_price = df['open']
+        
+        f = pd.DataFrame(index=df.index)
+        
+        # 1. PRICE ACTION FEATURES
+        f['price_change_1'] = close.pct_change(1)
+        f['price_change_3'] = close.pct_change(3)
+        f['price_change_5'] = close.pct_change(5)
+        f['price_velocity'] = close.pct_change().rolling(5).mean()
+        f['price_acceleration'] = f['price_velocity'].diff()
+        
+        # 2. MOVING AVERAGES CONSTELLATION
+        for period in [8, 13, 21, 34, 55, 89]:
+            f[f'ema_{period}'] = self.ema(close, period)
+            f[f'sma_{period}'] = self.sma(close, period)
+            
+        # EMA alignment score
+        ema_8, ema_21, ema_55 = f['ema_8'], f['ema_21'], f['ema_55']
+        f['ema_alignment'] = ((ema_8 > ema_21) & (ema_21 > ema_55)).astype(int)
+        f['ema_spacing'] = (ema_8 - ema_55) / (ema_55 + 1e-10)
+        
+        # 3. MOMENTUM INDICATORS
+        f['rsi_14'] = self.rsi(close, 14)
+        f['rsi_7'] = self.rsi(close, 7)
+        f['rsi_21'] = self.rsi(close, 21)
+        
+        # RSI divergence detection
+        f['rsi_divergence'] = 0
+        for i in range(10, len(f)):
+            price_higher = close.iloc[i] > close.iloc[i-5]
+            rsi_lower = f['rsi_14'].iloc[i] < f['rsi_14'].iloc[i-5]
+            price_lower = close.iloc[i] < close.iloc[i-5]
+            rsi_higher = f['rsi_14'].iloc[i] > f['rsi_14'].iloc[i-5]
+            
+            if price_higher and rsi_lower:
+                f['rsi_divergence'].iloc[i] = -1  # Bearish divergence
+            elif price_lower and rsi_higher:
+                f['rsi_divergence'].iloc[i] = 1   # Bullish divergence
+        
+        # Stochastic
+        k, d = self.stochastic(high, low, close)
+        f['stoch_k'] = k
+        f['stoch_d'] = d
+        f['stoch_alignment'] = ((k > 20) & (k < 80) & (k > d)).astype(int)
+        
+        # 4. TREND INDICATORS
+        macd, macd_signal, macd_hist = self.macd(close)
+        f['macd'] = macd
+        f['macd_signal'] = macd_signal
+        f['macd_hist'] = macd_hist
+        f['macd_momentum'] = (macd_hist > 0).astype(int)
+        
+        f['adx'] = self.adx(high, low, close)
+        f['adx_strength'] = (f['adx'] > 25).astype(int)
+        
+        # SuperTrend
+        supertrend, trend = self.supertrend(high, low, close)
+        f['supertrend'] = supertrend
+        f['supertrend_trend'] = trend
+        
+        # 5. VOLATILITY INDICATORS
+        f['atr_14'] = self.atr(high, low, close, 14)
+        f['atr_normalized'] = f['atr_14'] / close
+        
+        bb_mid, bb_upper, bb_lower = self.bollinger_bands(close, 20, 2)
+        f['bb_upper'] = bb_upper
+        f['bb_lower'] = bb_lower
+        f['bb_position'] = (close - bb_lower) / (bb_upper - bb_lower + 1e-10)
+        f['bb_squeeze'] = (bb_upper - bb_lower) / bb_mid < 0.1
+        f['bb_expansion'] = (bb_upper - bb_lower).pct_change() > 0.05
+        
+        # 6. VOLUME FEATURES
+        f['volume_sma_20'] = volume.rolling(20).mean()
+        f['volume_ratio'] = volume / (f['volume_sma_20'] + 1e-10)
+        f['volume_surge'] = (f['volume_ratio'] > 2.0).astype(int)
+        
+        # Volume-Price Trend
+        vpt = (volume * close.pct_change()).cumsum()
+        f['vpt'] = vpt
+        f['vpt_trend'] = (vpt > vpt.rolling(20).mean()).astype(int)
+        
+        # VWAP
+        vwap, vwap_upper, vwap_lower = self.vwap_bands(high, low, close, volume)
+        f['vwap'] = vwap
+        f['vwap_position'] = (close - vwap_lower) / (vwap_upper - vwap_lower + 1e-10)
+        
+        # 7. MARKET STRUCTURE
+        f['market_structure'] = self.market_structure(high, low, close)
+        
+        # Support/Resistance levels
+        for window in [20, 50, 100]:
+            f[f'resistance_{window}'] = high.rolling(window).max()
+            f[f'support_{window}'] = low.rolling(window).min()
+            f[f'near_resistance_{window}'] = (abs(close - f[f'resistance_{window}']) / close < 0.01).astype(int)
+            f[f'near_support_{window}'] = (abs(close - f[f'support_{window}']) / close < 0.01).astype(int)
+        
+        # 8. ADVANCED PATTERNS
+        # Doji pattern
+        body_size = abs(close - open_price)
+        candle_range = high - low
+        f['doji'] = (body_size < candle_range * 0.1).astype(int)
+        
+        # Hammer pattern
+        lower_shadow = np.minimum(open_price, close) - low
+        upper_shadow = high - np.maximum(open_price, close)
+        f['hammer'] = ((lower_shadow > body_size * 2) & (upper_shadow < body_size * 0.3)).astype(int)
+        
+        # Engulfing pattern
+        f['bullish_engulfing'] = ((close > open_price) & 
+                                 (open_price < close.shift(1)) & 
+                                 (close > open_price.shift(1)) &
+                                 (body_size > abs(close.shift(1) - open_price.shift(1)))).astype(int)
+        
+        # 9. REGIME CLASSIFICATION
+        returns = close.pct_change()
+        volatility = returns.rolling(20).std()
+        f['volatility_regime'] = pd.cut(volatility, bins=3, labels=['low', 'medium', 'high'])
+        f['volatility_regime'] = f['volatility_regime'].map({'low': 0, 'medium': 1, 'high': 2})
+        
+        trend_strength = abs(returns.rolling(20).mean()) / (volatility + 1e-10)
+        f['trend_regime'] = (trend_strength > trend_strength.rolling(50).mean()).astype(int)
+        
+        # 10. INTERACTION FEATURES
+        f['rsi_bb_interaction'] = f['rsi_14'] * f['bb_position']
+        f['volume_momentum'] = f['volume_ratio'] * f['price_velocity']
+        f['volatility_momentum'] = f['atr_normalized'] * abs(f['price_velocity'])
+        
+        # 11. TIME-BASED FEATURES
+        if hasattr(df.index, 'hour'):
+            f['hour'] = df.index.hour
+            f['day_of_week'] = df.index.dayofweek
+            f['is_session_open'] = ((df.index.hour >= 9) & (df.index.hour <= 16)).astype(int)  # NYC session
+            f['is_overlap'] = ((df.index.hour >= 8) & (df.index.hour <= 12)).astype(int)  # London-NYC overlap
+        else:
+            f['hour'] = 0
+            f['day_of_week'] = 0
+            f['is_session_open'] = 1
+            f['is_overlap'] = 0
+        
+        # 12. STATISTICAL FEATURES
+        for window in [5, 10, 20]:
+            f[f'returns_skew_{window}'] = returns.rolling(window).skew()
+            f[f'returns_kurt_{window}'] = returns.rolling(window).kurt()
+            f[f'price_percentile_{window}'] = close.rolling(window*2).rank(pct=True)
+        
+        # Fill NaN values
+        f = f.fillna(method='ffill').fillna(method='bfill').fillna(0)
+        
+        return f
+
+# =========================
+# 4. ML ENSEMBLE PREDICTOR V5
+# =========================
+class MLEnsemblePredictorV5:
+    def __init__(self, config: ProConfigV5):
+        self.config = config
+        self.model_dir = config.model_dir
+        os.makedirs(self.model_dir, exist_ok=True)
+        
+        self.base_models = {}
+        self.meta_model = None
+        self.feature_selector = None
+        self.scaler = RobustScaler()
+        
+        self.model_weights = {}
+        self.performance_history = {}
+        self.prediction_history = []
+        
+        self.last_training = datetime.now() - timedelta(days=1)
+        self.retrain_interval = timedelta(hours=12)  # Retrain more frequently
+        
+    def _initialize_models(self):
+        """Initialize ensemble of diverse models"""
+        models = {}
+        
+        # Gradient Boosting models
+        if xgb is not None:
+            models['xgb'] = xgb.XGBClassifier(
+                n_estimators=500,
+                learning_rate=0.02,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                use_label_encoder=False,
+                eval_metric='logloss'
+            )
+        
+        if lgb is not None:
+            models['lgb'] = lgb.LGBMClassifier(
+                n_estimators=500,
+                learning_rate=0.02,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                verbosity=-1
+            )
+        
+        # Tree-based models
+        models['rf'] = RandomForestClassifier(
+            n_estimators=300,
+            max_depth=10,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            max_features='sqrt',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        models['et'] = ExtraTreesClassifier(
+            n_estimators=300,
+            max_depth=10,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            max_features='sqrt',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        models['gb'] = GradientBoostingClassifier(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=6,
+            random_state=42
+        )
+        
+        # Neural network
+        models['mlp'] = MLPClassifier(
+            hidden_layer_sizes=(256, 128, 64),
+            activation='relu',
+            solver='adam',
+            learning_rate='adaptive',
+            max_iter=1000,
+            random_state=42,
+            early_stopping=True,
+            validation_fraction=0.2
+        )
+        
+        # SVM for different perspective
+        models['svm'] = SVC(
+            kernel='rbf',
+            probability=True,
+            random_state=42
+        )
+        
+        self.base_models = models
+
+    def prepare_features(self, X: pd.DataFrame) -> np.ndarray:
+        """Advanced feature preparation"""
+        # Remove highly correlated features
+        correlation_matrix = X.corr().abs()
+        upper_triangle = correlation_matrix.where(
+            np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool)
+        )
+        
+        high_corr_features = [column for column in upper_triangle.columns 
+                             if any(upper_triangle[column] > 0.95)]
+        X_cleaned = X.drop(high_corr_features, axis=1)
+        
+        # Scale features
+        X_scaled = pd.DataFrame(
+            self.scaler.fit_transform(X_cleaned),
+            columns=X_cleaned.columns,
+            index=X_cleaned.index
+        )
+        
+        return X_scaled
+
+    def advanced_feature_selection(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
+        """Multi-stage feature selection"""
+        # Stage 1: Remove low variance features
+        from sklearn.feature_selection import VarianceThreshold
+        var_selector = VarianceThreshold(threshold=0.01)
+        X_var = pd.DataFrame(
+            var_selector.fit_transform(X),
+            columns=X.columns[var_selector.get_support()],
+            index=X.index
+        )
+        
+        # Stage 2: Select based on mutual information
+        from sklearn.feature_selection import SelectKBest, mutual_info_classif
+        mi_selector = SelectKBest(score_func=mutual_info_classif, k=min(100, X_var.shape[1]//2))
+        X_mi = pd.DataFrame(
+            mi_selector.fit_transform(X_var, y),
+            columns=X_var.columns[mi_selector.get_support()],
+            index=X_var.index
+        )
+        
+        # Stage 3: Recursive feature elimination with cross-validation
+        estimator = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        rfecv = RFECV(estimator=estimator, step=1, cv=TimeSeriesSplit(n_splits=5), 
+                      scoring='roc_auc', n_jobs=-1)
+        
+        X_final = pd.DataFrame(
+            rfecv.fit_transform(X_mi, y),
+            columns=X_mi.columns[rfecv.get_support()],
+            index=X_mi.index
+        )
+        
+        self.feature_selector = {
+            'variance': var_selector,
+            'mutual_info': mi_selector,
+            'rfecv': rfecv,
+            'final_features': X_final.columns.tolist()
+        }
+        
+        return X_final
+
+    def train_ensemble(self, X: pd.DataFrame, y: pd.Series):
+        """Train advanced ensemble with cross-validation"""
+        self._initialize_models()
+        
+        # Prepare features
+        X_prepared = self.prepare_features(X)
+        
+        # Advanced feature selection
+        X_selected = self.advanced_feature_selection(X_prepared, y)
+        
+        # Time series cross-validation
+        tscv = TimeSeriesSplit(n_splits=8)
+        
+        # Train base models with OOF predictions
+        oof_predictions = np.zeros((len(X_selected), len(self.base_models)))
+        model_scores = {}
+        
+        for i, (model_name, model) in enumerate(self.base_models.items()):
+            oof_preds = np.zeros(len(X_selected))
+            cv_scores = []
+            
+            for train_idx, val_idx in tscv.split(X_selected):
+                X_train, X_val = X_selected.iloc[train_idx], X_selected.iloc[val_idx]
+                y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                
+                try:
+                    model.fit(X_train, y_train)
+                    val_preds = model.predict_proba(X_val)[:, 1]
+                    oof_preds[val_idx] = val_preds
+                    
+                    score = roc_auc_score(y_val, val_preds)
+                    cv_scores.append(score)
+                    
+                except Exception as e:
+                    logging.warning(f"Training failed for {model_name}: {e}")
+                    cv_scores.append(0.5)
+                    oof_preds[val_idx] = 0.5
+            
+            oof_predictions[:, i] = oof_preds
+            model_scores[model_name] = np.mean(cv_scores)
+            
+            # Train final model on full dataset
+            try:
+                model.fit(X_selected, y)
+                joblib.dump(model, os.path.join(self.model_dir, f"{model_name}.pkl"))
+            except Exception as e:
+                logging.warning(f"Final training failed for {model_name}: {e}")
+        
+        # Train meta-learner
+        meta_features = oof_predictions
+        
+        # Use multiple meta-learners and choose best
+        meta_candidates = {
+            'logistic': LogisticRegression(max_iter=1000, random_state=42),
+            'rf_meta': RandomForestClassifier(n_estimators=100, random_state=42),
+            'gb_meta': GradientBoostingClassifier(n_estimators=100, random_state=42)
+        }
+        
+        best_meta_score = 0
+        best_meta_model = None
+        
+        for meta_name, meta_model in meta_candidates.items():
+            meta_scores = cross_val_score(meta_model, meta_features, y, 
+                                        cv=tscv, scoring='roc_auc')
+            meta_score = np.mean(meta_scores)
+            
+            if meta_score > best_meta_score:
+                best_meta_score = meta_score
+                best_meta_model = meta_model
+        
+        # Train best meta-model
+        best_meta_model.fit(meta_features, y)
+        self.meta_model = best_meta_model
+        
+        # Calculate model weights based on performance
+        total_score = sum(model_scores.values())
+        self.model_weights = {
+            name: score / total_score if total_score > 0 else 1/len(model_scores)
+            for name, score in model_scores.items()
+        }
+        
+        # Save models
+        joblib.dump(self.meta_model, os.path.join(self.model_dir, "meta_model.pkl"))
+        joblib.dump(self.feature_selector, os.path.join(self.model_dir, "feature_selector.pkl"))
+        joblib.dump(self.scaler, os.path.join(self.model_dir, "scaler.pkl"))
+        joblib.dump(self.model_weights, os.path.join(self.model_dir, "model_weights.pkl"))
+        
+        # Update performance history
+        self.performance_history = model_scores
+        self.last_training = datetime.now()
+        
+        logging.info(f"Ensemble trained. Best meta score: {best_meta_score:.4f}")
+        logging.info(f"Model weights: {self.model_weights}")
+
+    def load_models(self):
+        """Load trained models"""
+        try:
+            self.feature_selector = joblib.load(os.path.join(self.model_dir, "feature_selector.pkl"))
+            self.scaler = joblib.load(os.path.join(self.model_dir, "scaler.pkl"))
+            self.meta_model = joblib.load(os.path.join(self.model_dir, "meta_model.pkl"))
+            self.model_weights = joblib.load(os.path.join(self.model_dir, "model_weights.pkl"))
+            
+            self._initialize_models()
+            for model_name in self.base_models.keys():
+                model_path = os.path.join(self.model_dir, f"{model_name}.pkl")
+                if os.path.exists(model_path):
+                    self.base_models[model_name] = joblib.load(model_path)
+                    
+            logging.info("Models loaded successfully")
+            
+        except Exception as e:
+            logging.warning(f"Failed to load models: {e}")
+            self._initialize_models()
+
+    def predict_ensemble(self, X: pd.DataFrame) -> Tuple[float, float, Dict[str, float]]:
+        """Advanced ensemble prediction with uncertainty estimation"""
+        if not self.feature_selector:
+            return 0.5, 0.0, {}
+        
+        try:
+            # Prepare features using same pipeline as training
+            X_cleaned = X.drop([col for col in X.columns 
+                              if col not in self.scaler.feature_names_in_], axis=1, errors='ignore')
+            
+            # Apply variance threshold
+            X_var = pd.DataFrame(
+                self.feature_selector['variance'].transform(X_cleaned),
+                columns=X_cleaned.columns[self.feature_selector['variance'].get_support()],
+                index=X_cleaned.index
+            )
+            
+            # Apply mutual information selection
+            X_mi = pd.DataFrame(
+                self.feature_selector['mutual_info'].transform(X_var),
+                columns=X_var.columns[self.feature_selector['mutual_info'].get_support()],
+                index=X_var.index
+            )
+            
+            # Apply RFECV selection
+            X_final = pd.DataFrame(
+                self.feature_selector['rfecv'].transform(X_mi),
+                columns=self.feature_selector['final_features'],
+                index=X_mi.index
+            )
+            
+            # Scale features
+            X_scaled = self.scaler.transform(X_final)
+            
+            # Get base model predictions
+            base_predictions = []
+            model_individual_scores = {}
+            
+            for model_name, model in self.base_models.items():
+                try:
+                    if hasattr(model, 'predict_proba'):
+                        pred = model.predict_proba(X_scaled)[:, 1].mean()
+                    else:
+                        pred = model.predict(X_scaled).mean()
+                    
+                    base_predictions.append(pred)
+                    model_individual_scores[model_name] = float(pred)
+                    
+                except Exception as e:
+                    logging.warning(f"Prediction failed for {model_name}: {e}")

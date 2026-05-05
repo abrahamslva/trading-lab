@@ -1,0 +1,413 @@
+4. Sistema de Trading Mejorado
+
+import ccxt
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import time
+import logging
+import yaml
+import os
+
+class QuantumTradingBotPro:
+    def __init__(self, config_path):
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Inicializar exchange
+        self.exchange = ccxt.binance({
+            'apiKey': self.config['binance']['api_key'],
+            'secret': self.config['binance']['api_secret'],
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future',  # Para trading de futuros
+            }
+        })
+        
+        # Inicializar componentes
+        self.indicators = QuantumIndicatorsPro()
+        self.sentiment = SentimentAnalyzerPro(self.config)
+        self.model = QuantumModelPro()
+        
+        # Configuración de trading
+        self.risk_per_trade = self.config['risk']['risk_per_trade']
+        self.stop_loss_pct = self.config['risk']['stop_loss_pct']
+        self.take_profit_pct = self.config['risk']['take_profit_pct']
+        self.max_positions = self.config['risk']['max_positions']
+        self.max_daily_loss = self.config['risk'].get('max_daily_loss', 0.05)  # 5% de pérdida diaria máxima
+        
+        # Estado del bot
+        self.positions = {}
+        self.last_model_update = None
+        self.daily_pnl = 0.0
+        self.last_day_reset = datetime.now().date()
+        
+        # Crear directorios necesarios
+        os.makedirs('models', exist_ok=True)
+        os.makedirs('logs', exist_ok=True)
+        
+        # Configurar logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('logs/quantum_fusion_pro.log'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def get_market_data(self, symbol, timeframe, limit=500):
+        """Obtener datos de mercado"""
+        ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df.set_index('timestamp')
+    
+    def update_sentiment_data(self, symbol):
+        """Actualizar datos de sentimiento"""
+        base_currency = symbol.split('/')[0]
+        
+        # Obtener sentimiento de diferentes fuentes
+        twitter_sentiment = self.sentiment.get_twitter_sentiment(base_currency, count=100)
+        reddit_sentiment = self.sentiment.get_reddit_sentiment(f'CryptoCurrency', limit=50)
+        news_sentiment = self.sentiment.get_news_sentiment(base_currency, days=3)
+        
+        # Obtener sentimiento de Telegram si está configurado
+        telegram_sentiment = pd.DataFrame()
+        if self.telegram_config:
+            telegram_sentiment = self.sentiment.get_telegram_sentiment(base_currency, limit=30)
+        
+        # Agregar sentimiento
+        sentiment_df = self.sentiment.aggregate_sentiment([
+            twitter_sentiment, reddit_sentiment, news_sentiment, telegram_sentiment
+        ])
+        
+        return sentiment_df
+    
+    def prepare_features(self, symbol, timeframe='1h'):
+        """Preparar características para el modelo"""
+        # Obtener datos de mercado
+        df = self.get_market_data(symbol, timeframe)
+        
+        # Obtener datos de sentimiento
+        sentiment_df = self.update_sentiment_data(symbol)
+        
+        # Construir características
+        features = self.indicators.build_features(df)
+        
+        # Unir con sentimiento
+        features = features.join(sentiment_df, how='left')
+        features['sentiment'] = features['sentiment'].fillna(0)
+        features['sentiment_volatility'] = features['sentiment_volatility'].fillna(0)
+        
+        # Añadir características de mercado adicionales
+        features['market_regime'] = self.detect_market_regime(df)
+        
+        return features
+    
+    def detect_market_regime(self, df, window=20):
+        """Detectar el régimen de mercado (tendencia, rango, volatilidad)"""
+        close = df['close']
+        
+        # Calcular tendencia
+        trend = close.pct_change(window).rolling(window).mean()
+        
+        # Calcular volatilidad
+        volatility = close.pct_change().rolling(window).std()
+        
+        # Clasificar régimen
+        regime = pd.Series(0, index=close.index)  # 0: rango, 1: tendencia alcista, -1: tendencia bajista
+        
+        # Tendencia alcista
+        regime[(trend > 0.01) & (volatility < 0.05)] = 1
+        
+        # Tendencia bajista
+        regime[(trend < -0.01) & (volatility < 0.05)] = -1
+        
+        # Mercado volátil
+        regime[volatility > 0.05] = 2
+        
+        return regime
+    
+    def train_model(self, symbol):
+        """Entrenar o actualizar el modelo"""
+        self.logger.info(f"Entrenando modelo para {symbol}...")
+        
+        # Preparar características
+        features = self.prepare_features(symbol)
+        
+        # Preparar etiquetas
+        labels = self.model.prepare_labels(features)
+        
+        # Entrenar modelo
+        accuracy = self.model.train(features, labels)
+        
+        # Guardar modelo
+        self.model.save_model(f'models/{symbol}_model')
+        
+        self.last_model_update = datetime.now()
+        self.logger.info(f"Modelo entrenado con accuracy: {accuracy:.4f}")
+        
+        return accuracy
+    
+    def generate_signal(self, symbol):
+        """Generar señal de trading con múltiples filtros"""
+        # Preparar características
+        features = self.prepare_features(symbol)
+        
+        # Obtener última fila
+        latest_features = features.iloc[-1:].copy()
+        
+        # Predecir
+        prob_up = self.model.predict(latest_features)[0]
+        
+        # Obtener régimen de mercado
+        market_regime = latest_features['market_regime'].values[0]
+        
+        # Ajustar umbrales según el régimen de mercado
+        if market_regime == 1:  # Tendencia alcista
+            buy_threshold = 0.60
+            sell_threshold = 0.30
+        elif market_regime == -1:  # Tendencia bajista
+            buy_threshold = 0.70
+            sell_threshold = 0.25
+        elif market_regime == 2:  # Mercado volátil
+            buy_threshold = 0.75
+            sell_threshold = 0.20
+        else:  # Rango
+            buy_threshold = 0.65
+            sell_threshold = 0.35
+        
+        # Generar señal
+        if prob_up > buy_threshold:
+            return 'buy', prob_up
+        elif prob_up < sell_threshold:
+            return 'sell', prob_up
+        else:
+            return 'hold', prob_up
+    
+    def calculate_position_size(self, symbol, price, confidence):
+        """Calcular tamaño de posición según gestión de riesgo avanzada"""
+        balance = self.exchange.fetch_balance()['USDT']['free']
+        
+        # Ajustar riesgo según confianza de la predicción
+        adjusted_risk = self.risk_per_trade * confidence
+        
+        # Calcular tamaño de posición
+        risk_amount = balance * adjusted_risk
+        position_size = risk_amount / (price * self.stop_loss_pct)
+        
+        # Redondear a tamaño de lote
+        min_qty = self.exchange.markets[symbol]['limits']['amount']['min']
+        position_size = max(min_qty, round(position_size / min_qty) * min_qty)
+        
+        # Limitar tamaño máximo por posición
+        max_position_size = balance * 0.2 / price  # Máximo 20% del balance por posición
+        position_size = min(position_size, max_position_size)
+        
+        return position_size
+    
+    def execute_trade(self, symbol, signal, price, confidence):
+        """Ejecutar operación con gestión avanzada"""
+        if signal == 'hold':
+            return
+        
+        # Verificar límite de posiciones
+        if len(self.positions) >= self.max_positions:
+            self.logger.warning("Límite de posiciones alcanzado")
+            return
+        
+        # Verificar pérdida diaria máxima
+        if self.daily_pnl < -self.max_daily_loss:
+            self.logger.warning(f"Pérdida diaria máxima alcanzada: {self.daily_pnl:.2%}")
+            return
+        
+        # Calcular tamaño de posición
+        position_size = self.calculate_position_size(symbol, price, confidence)
+        
+        try:
+            if signal == 'buy':
+                # Colocar orden de compra
+                order = self.exchange.create_market_buy_order(symbol, position_size)
+                
+                # Calcular niveles de stop loss y take profit
+                stop_loss = price * (1 - self.stop_loss_pct)
+                take_profit = price * (1 + self.take_profit_pct)
+                
+                # Configurar trailing stop
+                trailing_stop_pct = self.stop_loss_pct * 0.7  # 70% del stop loss inicial
+                
+                # Guardar posición
+                self.positions[symbol] = {
+                    'side': 'buy',
+                    'entry_price': price,
+                    'quantity': position_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'trailing_stop': stop_loss,
+                    'trailing_pct': trailing_stop_pct,
+                    'highest_price': price,
+                    'order_id': order['id'],
+                    'confidence': confidence,
+                    'entry_time': datetime.now()
+                }
+                
+                self.logger.info(f"Compra ejecutada: {symbol} @ {price}, SL: {stop_loss}, TP: {take_profit}, Confianza: {confidence:.2f}")
+                
+            elif signal == 'sell':
+                # Colocar orden de venta
+                order = self.exchange.create_market_sell_order(symbol, position_size)
+                
+                # Calcular niveles de stop loss y take profit
+                stop_loss = price * (1 + self.stop_loss_pct)
+                take_profit = price * (1 - self.take_profit_pct)
+                
+                # Configurar trailing stop
+                trailing_stop_pct = self.stop_loss_pct * 0.7  # 70% del stop loss inicial
+                
+                # Guardar posición
+                self.positions[symbol] = {
+                    'side': 'sell',
+                    'entry_price': price,
+                    'quantity': position_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'trailing_stop': stop_loss,
+                    'trailing_pct': trailing_stop_pct,
+                    'lowest_price': price,
+                    'order_id': order['id'],
+                    'confidence': confidence,
+                    'entry_time': datetime.now()
+                }
+                
+                self.logger.info(f"Venta ejecutada: {symbol} @ {price}, SL: {stop_loss}, TP: {take_profit}, Confianza: {confidence:.2f}")
+                
+        except Exception as e:
+            self.logger.error(f"Error al ejecutar operación: {e}")
+    
+    def check_positions(self, symbol, current_price):
+        """Verificar si se debe cerrar alguna posición con trailing stop"""
+        if symbol not in self.positions:
+            return
+        
+        position = self.positions[symbol]
+        
+        try:
+            if position['side'] == 'buy':
+                # Actualizar precio más alto
+                if current_price > position['highest_price']:
+                    position['highest_price'] = current_price
+                    # Actualizar trailing stop
+                    position['trailing_stop'] = max(
+                        position['trailing_stop'],
+                        position['highest_price'] * (1 - position['trailing_pct'])
+                    )
+                
+                # Verificar trailing stop
+                if current_price <= position['trailing_stop']:
+                    self.exchange.create_market_sell_order(symbol, position['quantity'])
+                    pnl = (current_price - position['entry_price']) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']  # Ponderar por confianza
+                    del self.positions[symbol]
+                    self.logger.info(f"Trailing stop activado para {symbol}, PnL: {pnl:.2%}")
+                
+                # Verificar take profit
+                elif current_price >= position['take_profit']:
+                    self.exchange.create_market_sell_order(symbol, position['quantity'])
+                    pnl = (current_price - position['entry_price']) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Take profit activado para {symbol}, PnL: {pnl:.2%}")
+            
+            elif position['side'] == 'sell':
+                # Actualizar precio más bajo
+                if current_price < position['lowest_price']:
+                    position['lowest_price'] = current_price
+                    # Actualizar trailing stop
+                    position['trailing_stop'] = min(
+                        position['trailing_stop'],
+                        position['lowest_price'] * (1 + position['trailing_pct'])
+                    )
+                
+                # Verificar trailing stop
+                if current_price >= position['trailing_stop']:
+                    self.exchange.create_market_buy_order(symbol, position['quantity'])
+                    pnl = (position['entry_price'] - current_price) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Trailing stop activado para {symbol}, PnL: {pnl:.2%}")
+                
+                # Verificar take profit
+                elif current_price <= position['take_profit']:
+                    self.exchange.create_market_buy_order(symbol, position['quantity'])
+                    pnl = (position['entry_price'] - current_price) / position['entry_price']
+                    self.daily_pnl += pnl * position['confidence']
+                    del self.positions[symbol]
+                    self.logger.info(f"Take profit activado para {symbol}, PnL: {pnl:.2%}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error al verificar posición: {e}")
+    
+    def reset_daily_pnl(self):
+        """Reiniciar PnL diario si es un nuevo día"""
+        current_date = datetime.now().date()
+        if current_date != self.last_day_reset:
+            self.daily_pnl = 0.0
+            self.last_day_reset = current_date
+            self.logger.info("Reiniciando PnL diario")
+    
+    def run(self):
+        """Ejecutar bot de trading"""
+        self.logger.info("Iniciando Quantum Fusion Pro...")
+        
+        # Entrenar modelos iniciales
+        for symbol in self.config['symbols']:
+            try:
+                self.train_model(symbol)
+            except Exception as e:
+                self.logger.error(f"Error entrenando modelo para {symbol}: {e}")
+        
+        # Bucle principal
+        while True:
+            try:
+                # Reiniciar PnL diario si es necesario
+                self.reset_daily_pnl()
+                
+                # Actualizar modelos diariamente
+                if self.last_model_update is None or \
+                   (datetime.now() - self.last_model_update) > timedelta(hours=24):
+                    for symbol in self.config['symbols']:
+                        try:
+                            self.train_model(symbol)
+                        except Exception as e:
+                            self.logger.error(f"Error actualizando modelo para {symbol}: {e}")
+                
+                # Procesar cada símbolo
+                for symbol in self.config['symbols']:
+                    try:
+                        # Obtener precio actual
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        current_price = ticker['last']
+                        
+                        # Generar señal
+                        signal, confidence = self.generate_signal(symbol)
+                        
+                        # Ejecutar operación si hay señal
+                        if signal != 'hold':
+                            self.execute_trade(symbol, signal, current_price, confidence)
+                        
+                        # Verificar posiciones abiertas
+                        self.check_positions(symbol, current_price)
+                        
+                        self.logger.info(f"{symbol}: {signal} (confianza: {confidence:.2f}), PnL diario: {self.daily_pnl:.2%}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error procesando {symbol}: {e}")
+                
+                # Esperar antes del siguiente ciclo
+                time.sleep(self.config['trading']['interval'])
+                
+            except Exception as e:
+                self.logger.error(f"Error en bucle principal: {e}")
+                time.sleep(60)

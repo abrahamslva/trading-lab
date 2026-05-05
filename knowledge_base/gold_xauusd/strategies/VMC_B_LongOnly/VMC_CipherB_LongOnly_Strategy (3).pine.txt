@@ -1,0 +1,111 @@
+//@version=6
+strategy("VMC Long", overlay=false, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1, initial_capital=10000)
+
+// ── INPUTS WaveTrend ──
+wtChannelLen = input.int(9,       title="WT Channel Len",      group="WaveTrend")
+wtAverageLen = input.int(12,      title="WT Average Len",      group="WaveTrend")
+wtMASource   = input.source(hlc3, title="WT MA Source",        group="WaveTrend")
+wtMALen      = input.int(3,       title="WT MA Len",           group="WaveTrend")
+obLevel      = input.int(53,      title="OB Level 1",          group="WaveTrend")
+osLevel      = input.int(-53,     title="OS Level 1",          group="WaveTrend")
+osLevel2     = input.int(-60,     title="OS Level 2 (Filtro)", group="WaveTrend")
+osLevel3     = input.int(-75,     title="OS Level 3",          group="WaveTrend")
+
+// ── INPUTS RSI ──
+rsiSRC = input.source(close, title="RSI Source", group="RSI")
+rsiLen = input.int(14,       title="RSI Length",  group="RSI")
+
+// ── INPUTS Divergencias ──
+wtDivOBLevel = input.int(45,    title="WT Bear Div min",     group="Divergencias")
+wtDivOSLevel = input.int(-65,   title="WT Bull Div min",     group="Divergencias")
+wtShowDiv    = input.bool(true,  title="Div WT en Gold",     group="Divergencias")
+
+// ── INPUTS Riesgo ──
+useTP         = input.bool(true,  title="Usar TP (%)",      group="Riesgo")
+tpPct         = input.float(4.0,  title="Take Profit %",    group="Riesgo", minval=0.1)
+useSL         = input.bool(true,  title="Usar SL (%)",      group="Riesgo")
+slPct         = input.float(2.0,  title="Stop Loss %",      group="Riesgo", minval=0.1)
+useSignalExit = input.bool(true,  title="Salir en Sell Signal", group="Riesgo")
+
+// ── FUNCIONES ──
+f_top_fractal(src) => src[4] < src[2] and src[3] < src[2] and src[2] > src[1] and src[2] > src[0]
+f_bot_fractal(src) => src[4] > src[2] and src[3] > src[2] and src[2] < src[1] and src[2] < src[0]
+f_fractalize(src)  => f_top_fractal(src) ? 1 : f_bot_fractal(src) ? -1 : 0
+
+f_findDivs(src, topLimit, botLimit, useLimits) =>
+    fractalTop = f_fractalize(src) > 0 and (useLimits ? src[2] >= topLimit : true) ? src[2] : na
+    fractalBot = f_fractalize(src) < 0 and (useLimits ? src[2] <= botLimit : true) ? src[2] : na
+    highPrev   = ta.valuewhen(not na(fractalTop), src[2],  1)
+    highPrice  = ta.valuewhen(not na(fractalTop), high[2], 1)
+    lowPrev    = ta.valuewhen(not na(fractalBot), src[2],  1)
+    lowPrice   = ta.valuewhen(not na(fractalBot), low[2],  1)
+    bearSignal = not na(fractalTop) and high[2] > highPrice and src[2] < highPrev
+    bullSignal = not na(fractalBot) and low[2]  < lowPrice  and src[2] > lowPrev
+    [fractalTop, fractalBot, lowPrev, bearSignal, bullSignal]
+
+f_wavetrend(src, chlen, avg, malen) =>
+    esa          = ta.ema(src, chlen)
+    de           = ta.ema(math.abs(src - esa), chlen)
+    ci           = (src - esa) / (0.015 * de)
+    wt1_         = ta.ema(ci, avg)
+    wt2_         = ta.sma(wt1_, malen)
+    wtCross_     = ta.cross(wt1_, wt2_)
+    wtCrossUp_   = wt2_ - wt1_ <= 0
+    wtCrossDown_ = wt2_ - wt1_ >= 0
+    [wt1_, wt2_, wtCross_, wtCrossUp_, wtCrossDown_]
+
+// ── CALCULOS ──
+rsiVal = ta.rsi(rsiSRC, rsiLen)
+[wt1, wt2, wtCross, wtCrossUp, wtCrossDown] = f_wavetrend(wtMASource, wtChannelLen, wtAverageLen, wtMALen)
+wtOversold   = wt2 <= osLevel
+wtOverbought = wt2 >= obLevel
+[wtFractalTop, wtFractalBot, wtLow_prev, wtBearDiv, wtBullDiv] = f_findDivs(wt2, wtDivOBLevel, wtDivOSLevel, true)
+
+// ── SEÑALES ──
+buySignalRaw = wtCross and wtCrossUp and wtOversold
+
+lastRsi      = ta.valuewhen(not na(wtFractalBot), rsiVal[2], 1)
+wtGoldBuyRaw = wtShowDiv and wtBullDiv and wtLow_prev <= osLevel3 and wt2 > osLevel3 and wtLow_prev - wt2 <= -5 and lastRsi < 30
+
+sellSignal   = wtCross and wtCrossDown and wtOverbought
+
+// ── FILTRO -60 ──
+belowFilter   = wt2 <= osLevel2
+longCondition = (buySignalRaw or wtGoldBuyRaw) and belowFilter
+
+// ── EJECUCION ──
+if longCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if useSignalExit and sellSignal and strategy.position_size > 0
+    strategy.close("Long", comment="Sell Signal")
+
+tpPrice = strategy.position_avg_price * (1 + tpPct / 100)
+slPrice = strategy.position_avg_price * (1 - slPct / 100)
+
+if strategy.position_size > 0
+    if useTP and useSL
+        strategy.exit("TP/SL", from_entry="Long", limit=tpPrice, stop=slPrice)
+    else if useTP
+        strategy.exit("TP",    from_entry="Long", limit=tpPrice)
+    else if useSL
+        strategy.exit("SL",    from_entry="Long", stop=slPrice)
+
+// ── VISUALIZACION ──
+colorGreen  = color.new(#3fff00, 0)
+colorOrange = color.new(#e2a400, 0)
+colorRed    = color.new(#ff0000, 0)
+colorWhite  = color.new(#ffffff, 0)
+
+plot(obLevel,  title="OB +53",         color=color.new(colorWhite, 70), linewidth=1, style=plot.style_stepline)
+plot(osLevel2, title="OS -60 (Filtro)",color=color.new(colorWhite, 40), linewidth=2, style=plot.style_stepline)
+plot(osLevel3, title="OS -75",         color=color.new(colorWhite, 75), linewidth=1, style=plot.style_stepline)
+plot(0,        title="Zero",           color=color.new(colorWhite, 70))
+plot(wt1,      title="WT1",            color=color.new(#4994ec, 30), style=plot.style_area)
+plot(wt2,      title="WT2",            color=color.new(#1f1559, 25), style=plot.style_area)
+
+plotchar(longCondition and buySignalRaw  ? wt2 : na, title="Entrada Verde",    char="●", color=colorGreen,                   location=location.absolute, size=size.small)
+plotchar(longCondition and wtGoldBuyRaw  ? wt2 : na, title="Entrada Dorada",   char="●", color=colorOrange,                  location=location.absolute, size=size.normal)
+plotchar(buySignalRaw and not belowFilter ? wt2 : na, title="Verde rechazado", char="○", color=color.new(colorGreen,  50),   location=location.absolute, size=size.tiny)
+plotchar(wtGoldBuyRaw and not belowFilter ? wt2 : na, title="Dorado rechazado",char="○", color=color.new(colorOrange, 50),   location=location.absolute, size=size.tiny)
+plotchar(sellSignal ? wt2 : na, title="Sell Signal", char="▼", color=colorRed, location=location.absolute, size=size.tiny)

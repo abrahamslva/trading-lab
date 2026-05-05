@@ -1,0 +1,6 @@
+instalar nuevas dependencias
+
+pip install scikit-learn pandas numpy talib ccxt python-binance
+pip install pyyaml requests beautifulsoup4 tweepy
+pip install matplotlib seaborn plotly dash
+pip install tensorflow torch  # Opcional para modelos avanzados

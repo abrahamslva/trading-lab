@@ -1,0 +1,80 @@
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+import joblib
+import numpy as np
+
+class QuantumModelLite:
+    def __init__(self, model_type='xgboost'):
+        self.model_type = model_type
+        self.model = None
+        self.is_trained = False
+        
+    def prepare_labels(self, df, horizon=5):
+        """Preparar etiquetas para clasificación"""
+        future_returns = df['close'].shift(-horizon).pct_change()
+        labels = (future_returns > 0).astype(int)
+        return labels
+    
+    def train(self, X, y):
+        """Entrenar el modelo con validación cruzada temporal"""
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        if self.model_type == 'xgboost':
+            self.model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                use_label_encoder=False,
+                eval_metric='logloss'
+            )
+        elif self.model_type == 'lightgbm':
+            self.model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8
+            )
+        else:
+            self.model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=6,
+                min_samples_split=10
+            )
+        
+        # Entrenamiento con validación cruzada
+        accuracies = []
+        for train_idx, test_idx in tscv.split(X):
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            
+            self.model.fit(X_train, y_train)
+            y_pred = self.model.predict(X_test)
+            
+            accuracies.append(accuracy_score(y_test, y_pred))
+        
+        print(f"Accuracy promedio: {np.mean(accuracies):.4f}")
+        self.is_trained = True
+        
+        return np.mean(accuracies)
+    
+    def predict(self, X):
+        """Predecir probabilidades"""
+        if not self.is_trained:
+            raise Exception("Modelo no entrenado")
+        
+        return self.model.predict_proba(X)[:, 1]
+    
+    def save_model(self, path):
+        """Guardar modelo entrenado"""
+        joblib.dump(self.model, path)
+    
+    def load_model(self, path):
+        """Cargar modelo entrenado"""
+        self.model = joblib.load(path)
+        self.is_trained = True

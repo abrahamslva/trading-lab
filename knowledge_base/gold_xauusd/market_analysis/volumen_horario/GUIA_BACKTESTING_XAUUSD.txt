@@ -1,0 +1,266 @@
+═══════════════════════════════════════════════════════════════════════
+ GUÍA COMPLETA DE BACKTESTING — XAUUSD 10 AÑOS (2015-2025)
+ 3 Expert Advisors para MetaTrader 5
+═══════════════════════════════════════════════════════════════════════
+
+ARCHIVOS GENERADOS:
+  ➤ EA_XAUUSD_Strategy1_AsianBreakout.mq5     → Estrategia #1
+  ➤ EA_XAUUSD_Strategy2_OBVolumeProfile.mq5   → Estrategia #2
+  ➤ EA_XAUUSD_Strategy3_MacroSwing.mq5        → Estrategia #3
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 1: INSTALAR LOS EAs EN METATRADER 5
+═══════════════════════════════════════════════════════════════════════
+
+1. Abre MetaTrader 5
+2. Ve a: Archivo → Abrir carpeta de datos → MQL5 → Experts
+3. COPIA los 3 archivos .mq5 a esa carpeta
+4. En MT5: presiona F4 para abrir MetaEditor, o haz doble clic en cada EA
+5. Presiona F7 (o el botón "Compilar") en MetaEditor para cada EA
+   → Debe aparecer: "0 errores, 0 advertencias"
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 2: DESCARGAR DATOS DE 10 AÑOS
+═══════════════════════════════════════════════════════════════════════
+
+1. En MT5: Herramientas → Historia → Centro de historia
+2. Busca: XAUUSD (o XAU/USD)
+3. Descarga:
+   - Timeframe M1 (1 minuto) — OBLIGATORIO para backtesting preciso
+   - Descarga desde: 01/01/2015 hasta hoy
+4. Espera que se complete la descarga (puede tardar 20-30 min)
+5. IMPORTANTE: Para estrategias de swing (EA3), también necesitas H4 y D1 data
+
+NOTA: Usa un broker con datos de alta calidad. Recomendado:
+  - IC Markets (raw spread)
+  - Pepperstone
+  - FP Markets
+  → Qualidad de modelado debe ser ≥99%
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 3: CONFIGURACIÓN DEL STRATEGY TESTER (BACKTESTING)
+═══════════════════════════════════════════════════════════════════════
+
+Ve a: Ver → Probador de Estrategias (o Ctrl+R)
+
+CONFIGURACIÓN GENERAL (igual para todos los EAs):
+┌─────────────────────────────────────────────────────────┐
+│ Símbolo:          XAUUSD                                 │
+│ Período:          M15 (EA1 y EA2) / H4 (EA3)            │
+│ Modelo:           Every tick based on real ticks (mejor) │
+│                   o "1 Minute OHLC" (más rápido)         │
+│ Depósito inicial: $100,000 USD                           │
+│ Apalancamiento:   1:10 o 1:20 (realista para prop firms)│
+│ Rango de fechas:  01.01.2015 — 01.01.2025 (10 años)     │
+│ Divisa:           USD                                    │
+└─────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════
+ CONFIGURACIÓN ESPECÍFICA DE CADA EA
+═══════════════════════════════════════════════════════════════════════
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ EA #1: Asian Range Breakout
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EA en Strategy Tester: EA_XAUUSD_Strategy1_AsianBreakout
+Período chart: M15
+Parámetros recomendados:
+  RiskPercent       = 0.5
+  DailyLossLimit    = 1.5
+  MaxTradesPerDay   = 2
+  AsiaStartHour     = 22
+  AsiaEndHour       = 8
+  MinRangePips      = 150    ← Ajustar: ORO en $4000+ mueve más
+  MaxRangePips      = 800
+  LondonEntryStart  = 8
+  LondonEntryEnd    = 11
+  SLMultiplierADR   = 0.15
+  MinSLPips         = 200
+  TP1Ratio          = 1.5
+  TP2Ratio          = 2.5
+  TP3Ratio          = 3.5
+  FilterMondayFriday = true
+  UseVolumeFilter   = true
+  ConservativeEntry = true   (más seguro para prop firms)
+
+OPTIMIZAR: RiskPercent (0.25-1.0), MinRangePips (100-300), SLMultiplierADR (0.10-0.25)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ EA #2: OB + Volume Profile
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EA en Strategy Tester: EA_XAUUSD_Strategy2_OBVolumeProfile
+Período chart: M15 (analiza H4 internamente)
+Parámetros recomendados:
+  RiskPercent       = 0.75
+  DailyLossLimit    = 1.5
+  MaxTradesPerWeek  = 4
+  OverlapStartHour  = 13
+  OverlapEndHour    = 17
+  OB_LookbackBars   = 50
+  OB_ImpulseMinBars = 3
+  OB_ImpulseMinPct  = 0.3
+  ATR_Period        = 14
+  SL_ATR_Mult       = 1.5
+  TP1_Ratio         = 2.0
+  TP2_Ratio         = 4.0
+  TP3_Ratio         = 6.0
+  FilterWeekdays    = true
+  UseRSI_Filter     = true
+
+OPTIMIZAR: SL_ATR_Mult (1.0-2.5), TP ratios, OB_ImpulseMinPct (0.2-0.6)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ EA #3: Macro Swing COT+OBV
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EA en Strategy Tester: EA_XAUUSD_Strategy3_MacroSwing
+Período chart: H4
+Parámetros recomendados:
+  RiskPercent       = 0.5
+  DailyLossLimit    = 1.5
+  WeeklyLossLimit   = 3.0
+  MaxPositions      = 1
+  EMA_Fast          = 20
+  EMA_Medium        = 50
+  EMA_Slow          = 200
+  UseOBVFilter      = true
+  FilterBySeasonality = true
+  UseRSIFilter      = true
+  UseMACDFilter     = true
+  ATR_Period        = 14
+  SL_ATR_Mult       = 1.5
+  TP1_Ratio         = 2.0
+  TP2_Ratio         = 5.0
+  TP3_Ratio         = 10.0
+  MinTradesBetween  = 3
+
+OPTIMIZAR: TP3_Ratio (7-15), EMA_Fast (15-25), SL_ATR_Mult (1.0-2.0)
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 4: EJECUTAR BACKTESTING
+═══════════════════════════════════════════════════════════════════════
+
+1. En Strategy Tester: haz clic en "Iniciar"
+2. Espera que termine (tiempo estimado por EA):
+   - EA1 (M15, 10 años): 5-15 minutos
+   - EA2 (M15, 10 años): 10-20 minutos
+   - EA3 (H4, 10 años):  2-5 minutos
+3. Una vez terminado: ve a la pestaña "Resultados" y "Gráfico"
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 5: MÉTRICAS A REPORTAR (copia estos valores del Strategy Tester)
+═══════════════════════════════════════════════════════════════════════
+
+Para cada EA, anota:
+
+1. RENDIMIENTO GENERAL
+   □ Ganancia total (%)
+   □ Ganancia neta ($)
+   □ Factor de beneficio (Profit Factor) — target: >1.5
+   □ Rendimiento mensual promedio (%)
+   
+2. WIN RATE
+   □ Número total de trades
+   □ Trades ganadores (%)
+   □ Trades perdedores (%)
+   □ Trades por mes promedio
+   
+3. RISK METRICS (CRUCIALES PARA PROP FIRMS)
+   □ Drawdown máximo absoluto ($)
+   □ Drawdown máximo relativo (%) — target: <10%
+   □ Drawdown máximo en balance
+   □ Mayor trade perdedor ($)
+   □ Mayor trade ganador ($)
+   □ Serie de pérdidas consecutivas máxima
+   □ Factor de recuperación
+
+4. RR Y ESTADÍSTICAS
+   □ Ratio ganancia/pérdida promedio
+   □ Trade promedio ganador ($)
+   □ Trade promedio perdedor ($)
+   □ Tiempo promedio en trade (horas/días)
+   □ GHPR (Geometric Holding Period Return)
+   □ Sharpe Ratio (si disponible)
+
+═══════════════════════════════════════════════════════════════════════
+ PASO 6: OPTIMIZACIÓN (OPCIONAL PERO RECOMENDADO)
+═══════════════════════════════════════════════════════════════════════
+
+En Strategy Tester:
+1. Ve a la pestaña "Parámetros"
+2. Marca los parámetros que quieres optimizar con el checkbox
+3. Selecciona tipo: "Genético" (más rápido) o "Completo"
+4. Criterio de optimización: "Máximo factor de recuperación" 
+   → Esto equilibra rentabilidad y drawdown (ideal para prop firms)
+5. Haz clic en "Iniciar optimización"
+
+PARÁMETROS CRÍTICOS A OPTIMIZAR (en ese orden):
+  1. RiskPercent (0.25 a 1.0, paso 0.25)
+  2. SL_ATR_Mult / SLMultiplierADR (0.10 a 2.5, paso 0.10)
+  3. TP1_Ratio, TP2_Ratio (1.0 a 5.0, paso 0.5)
+
+═══════════════════════════════════════════════════════════════════════
+ VALORES OBJETIVO PARA CUENTAS DE FONDEO (PROP FIRMS)
+═══════════════════════════════════════════════════════════════════════
+
+Pasa el desafío y mantiene el fondeo si:
+
+  ✅ Win Rate:              > 55% (E1: 70-80%, E2: 60-65%, E3: 55-60%)
+  ✅ Drawdown máximo:       < 8-10% (límite FTMO es 10%)
+  ✅ Drawdown diario máx:   < 4% (límite FTMO es 5%)
+  ✅ Profit Factor:         > 1.5 (ideal >2.0)
+  ✅ Rendimiento mensual:   5-15% (objetivo desafío en 30 días)
+  ✅ Mayor pérdida única:   < 2% del balance  
+  ✅ Trades/mes promedio:   EA1: 8-15 | EA2: 4-8 | EA3: 2-4
+  ✅ Factor de recuperación:> 2.0
+  ✅ Sharpe Ratio:          > 1.0
+
+  ⚠️  Si el drawdown máximo en backtesting supera 15%: AJUSTAR
+      - Reducir RiskPercent a 0.25%
+      - Activar FilterMondayFriday = true
+      - Reducir MaxTradesPerDay = 1
+
+═══════════════════════════════════════════════════════════════════════
+ NOTAS IMPORTANTES SOBRE LOS EAs
+═══════════════════════════════════════════════════════════════════════
+
+1. VOLUMEN: Los EAs usan tick volume (volumen de ticks de MT5) como 
+   proxy del volumen real. Correlación documentada: >85% con COMEX.
+   Broker con buena data: correlación más alta.
+
+2. ADR ADAPTATIVO: El oro pasó de ADR de $15 (2015) a $35-50+ (2024).
+   Los EAs calculan el ADR dinámicamente con los últimos 14 días.
+
+3. DXY FILTER: Desactivado en backtesting (no hay feed DXY en MT5 
+   por defecto). En live trading: activar y conectar USDINDEX.
+
+4. SPREADS: Usar spreads reales del broker. En backtesting:
+   - XAU/USD spread típico: 15-30 pips
+   - En Strategy Tester: Settings → Use current spread
+   
+5. SÍMBOLO: Puede aparecer como XAUUSD, GOLD, XAU/USD según broker.
+   Asegúrate de que el símbolo esté correcto.
+
+6. TIEMPO UTC: Los EAs están configurados en UTC. Si tu broker usa 
+   tiempo de servidor diferente, AJUSTA las horas en los inputs.
+   Verifica con: Print(TimeGMT(), " vs ", TimeCurrent())
+
+7. SLIPPAGE EN NOTICIAS: Las estrategias incluyen filtros de noticias
+   básicos. Para backtesting histórico perfecto, considera un 
+   filtro de noticias con base de datos histórica.
+
+═══════════════════════════════════════════════════════════════════════
+ TABLA COMPARATIVA ESPERADA (proyectada por documentos)
+═══════════════════════════════════════════════════════════════════════
+
+Estrategia    │ Win Rate │ RR Obj  │ Trades/Mes │ Rend/Mes │ Max DD
+──────────────┼──────────┼─────────┼────────────┼──────────┼────────
+EA1 Asian RB  │ 70-80%   │ 1:2.5   │ 8-15       │ 6-9%     │ <6%
+EA2 OB+VP     │ 60-65%   │ 1:4-6   │ 4-8        │ 7-10%    │ <7%
+EA3 Swing     │ 55-60%   │ 1:7-10  │ 2-4        │ 8-12%    │ <8%
+
+NOTA: Estos son los valores TEÓRICOS del documento. El backtesting
+real puede diferir. El backtesting es siempre más optimista que 
+el live trading (overfitting, slippage real, etc).
+Aplica un "factor de descuento" de 20-30% al rendimiento esperado.
+
+═══════════════════════════════════════════════════════════════════════

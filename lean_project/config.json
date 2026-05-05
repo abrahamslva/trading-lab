@@ -1,0 +1,59 @@
+{
+  "algorithm-type-name": "GoldAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "GoldAlgorithm.py",
+
+  "description": "Gold MA-Cross backtest. Reads best_params.json; supports XAUUSD (Forex) or GC (Futures).",
+
+  "parameters": {
+    "instrument_type":   "forex",
+    "timeframe":         "1D",
+    "best_params_path":  "../results/best_params.json",
+
+    "start_year":  "2020",
+    "start_month": "1",
+    "start_day":   "1",
+    "end_year":    "2024",
+    "end_month":   "12",
+    "end_day":     "31",
+    "init_cash":   "100000",
+
+    "fast_window": "20",
+    "slow_window": "50",
+    "ma_type":     "simple",
+
+    "max_drawdown_pct":  "10.0",
+    "max_daily_loss_pct": "2.0"
+  },
+
+  "data-folder": "../data/lean-data",
+
+  "environments": {
+    "backtesting": {
+      "live-mode": false,
+      "setup-handler": "QuantConnect.Lean.Engine.Setup.BacktestingSetupHandler",
+      "result-handler": "QuantConnect.Lean.Engine.Results.BacktestingResultHandler",
+      "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.FileSystemDataFeed",
+      "real-time-handler": "QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler",
+      "history-provider": "QuantConnect.Lean.Engine.HistoricalData.SubscriptionDataReaderHistoryProvider",
+      "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler"
+    }
+  },
+
+  "log-handler": "QuantConnect.Logging.CompositeLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "map-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskMapFileProvider",
+  "factor-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskFactorFileProvider",
+  "data-provider": "QuantConnect.Lean.Engine.DataProviders.DefaultDataProvider",
+  "object-store": "QuantConnect.Storage.LocalObjectStore",
+
+  "maximum-data-points-per-chart-series": 4000,
+  "maximum-chart-series": 30,
+
+  "transaction-log": "",
+  "results-destination-folder": "../results/lean",
+  "debug-mode": false,
+  "algorithm-manager-time-loop-maximum": 60
+}

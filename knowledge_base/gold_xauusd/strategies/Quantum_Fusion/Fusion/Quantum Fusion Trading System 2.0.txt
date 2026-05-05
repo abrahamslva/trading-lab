@@ -1,0 +1,1529 @@
+Quantum Fusion Trading System - Versión Optimizada
+
+import numpy as np
+import pandas as pd
+import ccxt
+import asyncio
+import websockets
+import json
+import time
+import logging
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.model_selection import train_test_split
+from sklearn.feature_selection import SelectKBest, f_classif
+from scipy.signal import argrelextrema
+import talib
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==================== CONFIGURACIÓN GLOBAL OPTIMIZADA ====================
+class GlobalConfig:
+    # Parámetros generales
+    INITIAL_CAPITAL = 50000
+    MAX_POSITIONS = 10
+    MAX_LEVERAGE = 5
+    MIN_CONFIDENCE = 0.80  # Aumentado para mayor precisión
+    RISK_PER_TRADE = 0.015  # Reducido para mejor gestión de riesgo
+    
+    # Pares a operar (expandido)
+    PAIRS = [
+        'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'ADA/USDT',
+        'DOT/USDT', 'MATIC/USDT', 'AVAX/USDT', 'LINK/USDT', 'UNI/USDT',
+        'XRP/USDT', 'LTC/USDT', 'BCH/USDT', 'ALGO/USDT', 'VET/USDT',
+        'FIL/USDT', 'TRX/USDT', 'XLM/USDT', 'ETC/USDT', 'XMR/USDT'
+    ]
+    
+    # Temporalidades a analizar
+    TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
+    
+    # Asignación de capital por estrategia (optimizada)
+    STRATEGY_ALLOCATION = {
+        'harmonic': 0.20,      # Patrones armónicos
+        'trend': 0.25,        # Trend following (aumentado)
+        'mean_reversion': 0.15, # Mean reversion (reducido)
+        'momentum': 0.15,     # Momentum
+        'breakout': 0.15,      # Breakout
+        'ml_prediction': 0.10  # Predicciones de ML (aumentado)
+    }
+    
+    # Parámetros de riesgo por estrategia (optimizados)
+    STRATEGY_RISK = {
+        'harmonic': {'stop_loss': 1.2, 'take_profit': 3.5, 'leverage': 2},
+        'trend': {'stop_loss': 1.8, 'take_profit': 4.5, 'leverage': 3},
+        'mean_reversion': {'stop_loss': 0.8, 'take_profit': 2.2, 'leverage': 2},
+        'momentum': {'stop_loss': 1.3, 'take_profit': 2.8, 'leverage': 3},
+        'breakout': {'stop_loss': 0.9, 'take_profit': 4.0, 'leverage': 4},
+        'ml_prediction': {'stop_loss': 1.0, 'take_profit': 3.2, 'leverage': 2}
+    }
+    
+    # Pesos de indicadores por estrategia (nuevo sistema)
+    INDICATOR_WEIGHTS = {
+        'harmonic': {
+            'fibonacci': 0.30, 'rsi': 0.20, 'macd': 0.15, 'volume': 0.15, 
+            'bollinger': 0.10, 'stochastic': 0.10
+        },
+        'trend': {
+            'adx': 0.25, 'macd': 0.20, 'ema': 0.20, 'parabolic': 0.15, 
+            'volume': 0.10, 'rsi': 0.10
+        },
+        'mean_reversion': {
+            'bollinger': 0.30, 'rsi': 0.25, 'stochastic': 0.20, 
+            'cci': 0.15, 'williams': 0.10
+        },
+        'momentum': {
+            'rsi': 0.25, 'macd': 0.20, 'stochastic': 0.20, 
+            'volume': 0.15, 'mfi': 0.10, 'roc': 0.10
+        },
+        'breakout': {
+            'volume': 0.30, 'bollinger': 0.25, 'adx': 0.20, 
+            'atr': 0.15, 'donchian': 0.10
+        },
+        'ml_prediction': {
+            'ml_score': 0.50, 'technical_score': 0.30, 'volume': 0.20
+        }
+    }
+
+# ==================== SISTEMA DE INDICADORES EXPANDIDO ====================
+class AdvancedIndicators:
+    def __init__(self):
+        self.indicator_cache = {}
+    
+    def calculate_all_indicators(self, df):
+        """Calcular todos los indicadores técnicos con parámetros optimizados"""
+        indicators = {}
+        
+        # Price action básicos
+        indicators['close'] = df['close']
+        indicators['high'] = df['high']
+        indicators['low'] = df['low']
+        indicators['open'] = df['open']
+        indicators['volume'] = df['volume']
+        indicators['returns'] = df['close'].pct_change()
+        
+        # Moving averages (expandido)
+        indicators['sma_10'] = talib.SMA(df['close'], timeperiod=10)
+        indicators['sma_20'] = talib.SMA(df['close'], timeperiod=20)
+        indicators['sma_50'] = talib.SMA(df['close'], timeperiod=50)
+        indicators['sma_200'] = talib.SMA(df['close'], timeperiod=200)
+        indicators['ema_12'] = talib.EMA(df['close'], timeperiod=12)
+        indicators['ema_26'] = talib.EMA(df['close'], timeperiod=26)
+        indicators['ema_50'] = talib.EMA(df['close'], timeperiod=50)
+        indicators['wma_20'] = talib.WMA(df['close'], timeperiod=20)
+        
+        # Momentum indicators (expandido)
+        indicators['rsi'] = talib.RSI(df['close'], timeperiod=14)
+        indicators['rsi_7'] = talib.RSI(df['close'], timeperiod=7)
+        indicators['rsi_21'] = talib.RSI(df['close'], timeperiod=21)
+        indicators['macd'], indicators['macd_signal'], indicators['macd_hist'] = talib.MACD(df['close'])
+        indicators['stoch_k'], indicators['stoch_d'] = talib.STOCH(df['high'], df['low'], df['close'])
+        indicators['stoch_rsi'] = talib.STOCHRSI(df['close'], timeperiod=14)
+        indicators['cci'] = talib.CCI(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['williams_r'] = talib.WILLR(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['mfi'] = talib.MFI(df['high'], df['low'], df['close'], df['volume'], timeperiod=14)
+        indicators['roc'] = talib.ROC(df['close'], timeperiod=10)
+        indicators['momentum'] = talib.MOM(df['close'], timeperiod=10)
+        
+        # Volatility indicators (expandido)
+        indicators['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['atr_7'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=7)
+        indicators['bb_upper'], indicators['bb_middle'], indicators['bb_lower'] = talib.BBANDS(df['close'], timeperiod=20)
+        indicators['bb_width'] = (indicators['bb_upper'] - indicators['bb_lower']) / indicators['bb_middle']
+        indicators['kc_middle'], indicators['kc_upper'], indicators['kc_lower'] = self.calculate_keltner(df)
+        indicators['donchian_upper'], indicators['donchian_lower'] = talib.MAX(df['high'], 20), talib.MIN(df['low'], 20)
+        
+        # Trend indicators (expandido)
+        indicators['adx'] = talib.ADX(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['adxr'] = talib.ADXR(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['aroon_up'], indicators['aroon_down'] = talib.AROON(df['high'], df['low'], timeperiod=14)
+        indicators['aroon_osc'] = indicators['aroon_up'] - indicators['aroon_down']
+        indicators['parabolic_sar'] = talib.SAR(df['high'], df['low'], acceleration=0.02, maximum=0.2)
+        indicators['trix'] = talib.TRIX(df['close'], timeperiod=14)
+        
+        # Volume indicators (expandido)
+        indicators['volume_sma'] = talib.SMA(df['volume'], timeperiod=20)
+        indicators['volume_ema'] = talib.EMA(df['volume'], timeperiod=20)
+        indicators['volume_ratio'] = df['volume'] / indicators['volume_sma']
+        indicators['obv'] = talib.OBV(df['close'], df['volume'])
+        indicators['vwap'] = self.calculate_vwap(df)
+        indicators['ad_line'] = talib.AD(df['high'], df['low'], df['close'], df['volume'])
+        indicators['cmf'] = self.calculate_cmf(df)
+        
+        # Pattern indicators (nuevos)
+        indicators['doji'] = talib.CDLDOJI(df['open'], df['high'], df['low'], df['close'])
+        indicators['hammer'] = talib.CDLHAMMER(df['open'], df['high'], df['low'], df['close'])
+        indicators['engulfing'] = talib.CDLENGULFING(df['open'], df['high'], df['low'], df['close'])
+        indicators['morning_star'] = talib.CDLMORNINGSTAR(df['open'], df['high'], df['low'], df['close'])
+        indicators['evening_star'] = talib.CDLEVENINGSTAR(df['open'], df['high'], df['low'], df['close'])
+        
+        # Market structure indicators
+        indicators['support'], indicators['resistance'] = self.calculate_support_resistance(df)
+        indicators['trend_strength'] = self.calculate_trend_strength(df)
+        indicators['volatility_regime'] = self.calculate_volatility_regime(indicators)
+        
+        return indicators
+    
+    def calculate_keltner(self, df, period=20):
+        """Calcular Keltner Channels"""
+        ema = talib.EMA(df['close'], timeperiod=period)
+        atr = talib.ATR(df['high'], df['low'], df['close'], timeperiod=period)
+        upper = ema + (2 * atr)
+        lower = ema - (2 * atr)
+        return ema, upper, lower
+    
+    def calculate_vwap(self, df):
+        """Calcular VWAP"""
+        tp = (df['high'] + df['low'] + df['close']) / 3
+        vwap = (tp * df['volume']).cumsum() / df['volume'].cumsum()
+        return vwap
+    
+    def calculate_cmf(self, df):
+        """Calcular Chaikin Money Flow"""
+        mfv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low']) * df['volume']
+        cmf = mfv.rolling(window=20).sum() / df['volume'].rolling(window=20).sum()
+        return cmf
+    
+    def calculate_support_resistance(self, df, window=20):
+        """Calcular niveles de soporte y resistencia"""
+        highs = df['high'].rolling(window=window).max()
+        lows = df['low'].rolling(window=window).min()
+        return lows, highs
+    
+    def calculate_trend_strength(self, df):
+        """Calcular fuerza de tendencia"""
+        sma_20 = talib.SMA(df['close'], timeperiod=20)
+        sma_50 = talib.SMA(df['close'], timeperiod=50)
+        trend_strength = abs(sma_20 - sma_50) / sma_50
+        return trend_strength
+    
+    def calculate_volatility_regime(self, indicators):
+        """Calcular régimen de volatilidad"""
+        atr = indicators['atr']
+        atr_ma = atr.rolling(window=50).mean()
+        volatility_ratio = atr / atr_ma
+        return volatility_ratio
+
+# ==================== SISTEMA DE PONDERACIÓN DINÁMICA ====================
+class DynamicWeightingSystem:
+    def __init__(self):
+        self.market_regime = 'unknown'
+        self.volatility_state = 'normal'
+        self.performance_history = {}
+    
+    def update_market_regime(self, indicators):
+        """Actualizar régimen del mercado"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        # Determinar régimen de tendencia
+        adx = latest.get('adx', 0)
+        trend_strength = latest.get('trend_strength', 0)
+        
+        if adx > 30 and trend_strength > 0.02:
+            self.market_regime = 'trending'
+        elif adx < 20 and trend_strength < 0.01:
+            self.market_regime = 'ranging'
+        else:
+            self.market_regime = 'transition'
+        
+        # Determinar estado de volatilidad
+        volatility_regime = latest.get('volatility_regime', 1)
+        if volatility_regime > 1.5:
+            self.volatility_state = 'high'
+        elif volatility_regime < 0.7:
+            self.volatility_state = 'low'
+        else:
+            self.volatility_state = 'normal'
+    
+    def calculate_indicator_weights(self, strategy, indicators):
+        """Calcular pesos dinámicos de indicadores según condiciones del mercado"""
+        base_weights = GlobalConfig.INDICATOR_WEIGHTS[strategy].copy()
+        
+        # Ajustar pesos según régimen del mercado
+        if self.market_regime == 'trending':
+            if strategy == 'trend':
+                base_weights['adx'] *= 1.3
+                base_weights['macd'] *= 1.2
+                base_weights['ema'] *= 1.2
+            elif strategy == 'mean_reversion':
+                base_weights['bollinger'] *= 0.7
+                base_weights['rsi'] *= 0.8
+        
+        elif self.market_regime == 'ranging':
+            if strategy == 'mean_reversion':
+                base_weights['bollinger'] *= 1.3
+                base_weights['rsi'] *= 1.2
+                base_weights['stochastic'] *= 1.2
+            elif strategy == 'trend':
+                base_weights['adx'] *= 0.7
+                base_weights['parabolic'] *= 0.8
+        
+        # Ajustar según volatilidad
+        if self.volatility_state == 'high':
+            if strategy == 'breakout':
+                base_weights['volume'] *= 1.3
+                base_weights['atr'] *= 1.2
+            else:
+                base_weights['rsi'] *= 0.8
+                base_weights['stochastic'] *= 0.8
+        
+        # Normalizar pesos
+        total_weight = sum(base_weights.values())
+        normalized_weights = {k: v/total_weight for k, v in base_weights.items()}
+        
+        return normalized_weights
+    
+    def calculate_strategy_score(self, strategy, indicators, signal):
+        """Calcular puntuación de la estrategia con pesos dinámicos"""
+        weights = self.calculate_indicator_weights(strategy, indicators)
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        score = 0.0
+        
+        if strategy == 'harmonic':
+            score += self._calculate_harmonic_score(latest, weights, signal)
+        elif strategy == 'trend':
+            score += self._calculate_trend_score(latest, weights)
+        elif strategy == 'mean_reversion':
+            score += self._calculate_mean_reversion_score(latest, weights)
+        elif strategy == 'momentum':
+            score += self._calculate_momentum_score(latest, weights)
+        elif strategy == 'breakout':
+            score += self._calculate_breakout_score(latest, weights)
+        elif strategy == 'ml_prediction':
+            score += self._calculate_ml_score(latest, weights, signal)
+        
+        return min(score, 1.0)
+    
+    def _calculate_harmonic_score(self, latest, weights, signal):
+        """Calcular puntuación para estrategia armónica"""
+        score = signal.get('confidence', 0) * weights.get('fibonacci', 0)
+        
+        # Confirmaciones técnicas
+        if 30 < latest.get('rsi', 50) < 70:
+            score += weights.get('rsi', 0) * 0.8
+        
+        if latest.get('macd_hist', 0) > 0:
+            score += weights.get('macd', 0) * 0.7
+        
+        if latest.get('volume_ratio', 1) > 1.2:
+            score += weights.get('volume', 0) * 0.6
+        
+        return score
+    
+    def _calculate_trend_score(self, latest, weights):
+        """Calcular puntuación para estrategia de tendencia"""
+        score = 0.0
+        
+        # Fuerza de tendencia
+        if latest.get('adx', 0) > 25:
+            score += weights.get('adx', 0) * min(latest['adx'] / 50, 1.0)
+        
+        # Momentum
+        if latest.get('macd_hist', 0) > 0:
+            score += weights.get('macd', 0) * 0.8
+        
+        # Media móvil
+        if latest.get('ema_12', 0) > latest.get('ema_26', 0):
+            score += weights.get('ema', 0) * 0.7
+        
+        # SAR
+        if latest.get('parabolic_sar', 0) < latest.get('close', 0):
+            score += weights.get('parabolic', 0) * 0.6
+        
+        # Volumen
+        if latest.get('volume_ratio', 1) > 1.1:
+            score += weights.get('volume', 0) * 0.5
+        
+        return score
+    
+    def _calculate_mean_reversion_score(self, latest, weights):
+        """Calcular puntuación para mean reversion"""
+        score = 0.0
+        
+        # Bollinger Bands
+        bb_position = (latest.get('close', 0) - latest.get('bb_lower', 0)) / \
+                     (latest.get('bb_upper', 0) - latest.get('bb_lower', 0))
+        
+        if bb_position < 0.1 or bb_position > 0.9:
+            score += weights.get('bollinger', 0) * 0.9
+        
+        # RSI extremo
+        rsi = latest.get('rsi', 50)
+        if rsi < 30 or rsi > 70:
+            score += weights.get('rsi', 0) * 0.8
+        
+        # Stochastic extremo
+        stoch_k = latest.get('stoch_k', 50)
+        if stoch_k < 20 or stoch_k > 80:
+            score += weights.get('stochastic', 0) * 0.7
+        
+        # CCI extremo
+        cci = latest.get('cci', 0)
+        if cci < -150 or cci > 150:
+            score += weights.get('cci', 0) * 0.6
+        
+        # Williams %R extremo
+        williams = latest.get('williams_r', -50)
+        if williams < -80 or williams > -20:
+            score += weights.get('williams', 0) * 0.5
+        
+        return score
+    
+    def _calculate_momentum_score(self, latest, weights):
+        """Calcular puntuación para momentum"""
+        score = 0.0
+        
+        # RSI momentum
+        rsi = latest.get('rsi', 50)
+        if 40 < rsi < 60:
+            score += weights.get('rsi', 0) * 0.8
+        
+        # MACD momentum
+        if latest.get('macd_hist', 0) > 0:
+            score += weights.get('macd', 0) * 0.8
+        
+        # Stochastic momentum
+        stoch_k = latest.get('stoch_k', 50)
+        if 20 < stoch_k < 80:
+            score += weights.get('stochastic', 0) * 0.7
+        
+        # Volumen confirmación
+        if latest.get('volume_ratio', 1) > 1.3:
+            score += weights.get('volume', 0) * 0.6
+        
+        # MFI momentum
+        mfi = latest.get('mfi', 50)
+        if 30 < mfi < 70:
+            score += weights.get('mfi', 0) * 0.5
+        
+        # ROC momentum
+        roc = latest.get('roc', 0)
+        if abs(roc) > 2:
+            score += weights.get('roc', 0) * 0.4
+        
+        return score
+    
+    def _calculate_breakout_score(self, latest, weights):
+        """Calcular puntuación para breakout"""
+        score = 0.0
+        
+        # Volumen fuerte
+        volume_ratio = latest.get('volume_ratio', 1)
+        if volume_ratio > 2.0:
+            score += weights.get('volume', 0) * min(volume_ratio / 3, 1.0)
+        
+        # Breakout de Bollinger
+        close = latest.get('close', 0)
+        bb_upper = latest.get('bb_upper', 0)
+        bb_lower = latest.get('bb_lower', 0)
+        
+        if close > bb_upper or close < bb_lower:
+            score += weights.get('bollinger', 0) * 0.9
+        
+        # Fuerza de tendencia
+        if latest.get('adx', 0) > 30:
+            score += weights.get('adx', 0) * min(latest['adx'] / 50, 1.0)
+        
+        # Volatilidad alta
+        atr = latest.get('atr', 0)
+        if atr > latest.get('atr_7', 0) * 1.2:
+            score += weights.get('atr', 0) * 0.7
+        
+        # Breakout de Donchian
+        donchian_upper = latest.get('donchian_upper', 0)
+        donchian_lower = latest.get('donchian_lower', 0)
+        
+        if close > donchian_upper or close < donchian_lower:
+            score += weights.get('donchian', 0) * 0.6
+        
+        return score
+    
+    def _calculate_ml_score(self, latest, weights, signal):
+        """Calcular puntuación para ML prediction"""
+        score = 0.0
+        
+        # Puntuación del modelo ML
+        ml_confidence = signal.get('confidence', 0)
+        score += weights.get('ml_score', 0) * ml_confidence
+        
+        # Confirmación técnica
+        tech_score = self._calculate_technical_confirmation(latest)
+        score += weights.get('technical_score', 0) * tech_score
+        
+        # Confirmación de volumen
+        volume_ratio = latest.get('volume_ratio', 1)
+        if volume_ratio > 1.2:
+            score += weights.get('volume', 0) * min(volume_ratio / 2, 1.0)
+        
+        return score
+    
+    def _calculate_technical_confirmation(self, latest):
+        """Calcular confirmación técnica para ML"""
+        confirmations = 0
+        total_checks = 0
+        
+        # RSI confirmation
+        rsi = latest.get('rsi', 50)
+        if 30 < rsi < 70:
+            confirmations += 1
+        total_checks += 1
+        
+        # MACD confirmation
+        if latest.get('macd_hist', 0) != 0:
+            confirmations += 1
+        total_checks += 1
+        
+        # Trend confirmation
+        if latest.get('adx', 0) > 20:
+            confirmations += 1
+        total_checks += 1
+        
+        # Volume confirmation
+        if latest.get('volume_ratio', 1) > 1.1:
+            confirmations += 1
+        total_checks += 1
+        
+        return confirmations / total_checks if total_checks > 0 else 0
+
+# ==================== SISTEMA DE MACHINE LEARNING MEJORADO ====================
+class EnhancedMLPredictor:
+    def __init__(self):
+        self.models = {
+            'rf': RandomForestClassifier(n_estimators=300, max_depth=15, min_samples_split=5, random_state=42),
+            'gb': GradientBoostingClassifier(n_estimators=300, max_depth=8, learning_rate=0.05, random_state=42),
+            'et': ExtraTreesClassifier(n_estimators=300, max_depth=15, min_samples_split=5, random_state=42),
+            'mlp': MLPClassifier(hidden_layer_sizes=(200, 100, 50), max_iter=1000, alpha=0.001, random_state=42)
+        }
+        self.scalers = {}
+        self.feature_selector = {}
+        self.is_trained = False
+        self.feature_names = []
+        self.model_weights = {'rf': 0.3, 'gb': 0.3, 'et': 0.2, 'mlp': 0.2}
+        
+    def prepare_enhanced_features(self, df, indicators):
+        """Preparar características mejoradas para ML"""
+        features = pd.DataFrame()
+        
+        # Características de precio (expandido)
+        features['price_change'] = df['close'].pct_change()
+        features['price_change_5'] = df['close'].pct_change(5)
+        features['price_change_10'] = df['close'].pct_change(10)
+        features['log_return'] = np.log(df['close'] / df['close'].shift(1))
+        features['volatility_5'] = features['price_change'].rolling(5).std()
+        features['volatility_10'] = features['price_change'].rolling(10).std()
+        features['volatility_20'] = features['price_change'].rolling(20).std()
+        
+        # Características de media móvil
+        features['sma_ratio_20_50'] = indicators['sma_20'] / indicators['sma_50']
+        features['sma_ratio_10_20'] = indicators['sma_10'] / indicators['sma_20']
+        features['ema_ratio_12_26'] = indicators['ema_12'] / indicators['ema_26']
+        features['ema_ratio_12_50'] = indicators['ema_12'] / indicators['ema_50']
+        features['price_vs_sma20'] = (df['close'] - indicators['sma_20']) / indicators['sma_20']
+        features['price_vs_sma50'] = (df['close'] - indicators['sma_50']) / indicators['sma_50']
+        features['price_vs_sma200'] = (df['close'] - indicators['sma_200']) / indicators['sma_200']
+        
+        # Características de momentum (expandido)
+        features['rsi'] = indicators['rsi']
+        features['rsi_7'] = indicators['rsi_7']
+        features['rsi_21'] = indicators['rsi_21']
+        features['rsi_divergence'] = features['rsi'] - features['rsi'].rolling(10).mean()
+        features['macd'] = indicators['macd']
+        features['macd_signal'] = indicators['macd_signal']
+        features['macd_hist'] = indicators['macd_hist']
+        features['macd_divergence'] = features['macd_hist'] - features['macd_hist'].rolling(10).mean()
+        features['stoch_k'] = indicators['stoch_k']
+        features['stoch_d'] = indicators['stoch_d']
+        features['stoch_rsi'] = indicators['stoch_rsi']
+        features['cci'] = indicators['cci']
+        features['williams_r'] = indicators['williams_r']
+        features['mfi'] = indicators['mfi']
+        features['roc'] = indicators['roc']
+        features['momentum'] = indicators['momentum']
+        features['trix'] = indicators['trix']
+        
+        # Características de volatilidad (expandido)
+        features['atr'] = indicators['atr']
+        features['atr_ratio'] = indicators['atr'] / df['close']
+        features['atr_change'] = features['atr'].pct_change()
+        features['bb_position'] = (df['close'] - indicators['bb_lower']) / (indicators['bb_upper'] - indicators['bb_lower'])
+        features['bb_width'] = indicators['bb_width']
+        features['bb_squeeze'] = features['bb_width'] < features['bb_width'].rolling(50).mean() * 0.8
+        features['kc_position'] = (df['close'] - indicators['kc_lower']) / (indicators['kc_upper'] - indicators['kc_lower'])
+        
+        # Características de volumen (expandido)
+        features['volume_ratio'] = indicators['volume_ratio']
+        features['volume_change'] = df['volume'].pct_change()
+        features['volume_sma_ratio'] = indicators['volume'] / indicators['volume_sma']
+        features['volume_ema_ratio'] = indicators['volume'] / indicators['volume_ema']
+        features['obv'] = indicators['obv']
+        features['obv_change'] = features['obv'].pct_change()
+        features['vwap'] = indicators['vwap']
+        features['price_vs_vwap'] = (df['close'] - features['vwap']) / features['vwap']
+        features['ad_line'] = indicators['ad_line']
+        features['cmf'] = indicators['cmf']
+        
+        # Características de tendencia (expandido)
+        features['adx'] = indicators['adx']
+        features['adxr'] = indicators['adxr']
+        features['aroon_up'] = indicators['aroon_up']
+        features['aroon_down'] = indicators['aroon_down']
+        features['aroon_osc'] = indicators['aroon_osc']
+        features['trend_strength'] = indicators['trend_strength']
+        features['parabolic_sar'] = indicators['parabolic_sar']
+        features['price_vs_sar'] = (df['close'] - features['parabolic_sar']) / df['close']
+        
+        # Características de patrones
+        features['doji'] = indicators['doji']
+        features['hammer'] = indicators['hammer']
+        features['engulfing'] = indicators['engulfing']
+        features['morning_star'] = indicators['morning_star']
+        features['evening_star'] = indicators['evening_star']
+        
+        # Características de estructura de mercado
+        features['support_distance'] = (df['close'] - indicators['support']) / df['close']
+        features['resistance_distance'] = (indicators['resistance'] - df['close']) / df['close']
+        features['volatility_regime'] = indicators['volatility_regime']
+        
+        # Características temporales
+        features['hour'] = df.index.hour
+        features['day_of_week'] = df.index.dayofweek
+        features['day_of_month'] = df.index.day
+        features['month'] = df.index.month
+        features['quarter'] = df.index.quarter
+        
+        # Características de interacción
+        features['rsi_volume'] = features['rsi'] * features['volume_ratio']
+        features['macd_volume'] = features['macd_hist'] * features['volume_ratio']
+        features['adx_volume'] = features['adx'] * features['volume_ratio']
+        features['volatility_trend'] = features['volatility_20'] * features['trend_strength']
+        
+        # Eliminar NaN
+        features = features.dropna()
+        
+        self.feature_names = features.columns.tolist()
+        return features
+    
+    def train_models(self, historical_data):
+        """Entrenar modelos de ML con selección de características"""
+        print("Entrenando modelos de ML mejorados...")
+        
+        all_features = []
+        all_directions = []
+        all_magnitudes = []
+        
+        for pair_data in historical_data:
+            if len(pair_data) < 200:
+                continue
+                
+            indicators = AdvancedIndicators().calculate_all_indicators(pair_data)
+            features = self.prepare_enhanced_features(pair_data, indicators)
+            directions, magnitudes = self.prepare_targets(pair_data)
+            
+            # Alinear características y targets
+            min_length = min(len(features), len(directions), len(magnitudes))
+            if min_length > 100:
+                all_features.append(features.iloc[:min_length])
+                all_directions.append(directions.iloc[:min_length])
+                all_magnitudes.append(magnitudes.iloc[:min_length])
+        
+        if not all_features:
+            print("No hay suficientes datos para entrenar")
+            return
+        
+        # Combinar todos los datos
+        X = pd.concat(all_features, ignore_index=True)
+        y_direction = pd.concat(all_directions, ignore_index=True)
+        y_magnitude = pd.concat(all_magnitudes, ignore_index=True)
+        
+        # Dividir datos
+        X_train, X_test, y_train, y_test = train_test_split(X, y_direction, test_size=0.2, random_state=42)
+        
+        # Selección de características
+        print("Seleccionando características más importantes...")
+        selector = SelectKBest(score_func=f_classif, k=50)
+        X_train_selected = selector.fit_transform(X_train, y_train)
+        X_test_selected = selector.transform(X_test)
+        
+        # Entrenar cada modelo
+        for model_name, model in self.models.items():
+            print(f"Entrenando modelo {model_name}...")
+            
+            # Escalar características
+            if model_name == 'mlp':
+                scaler = RobustScaler()
+                X_train_scaled = scaler.fit_transform(X_train_selected)
+                X_test_scaled = scaler.transform(X_test_selected)
+            else:
+                scaler = StandardScaler()
+                X_train_scaled = scaler.fit_transform(X_train_selected)
+                X_test_scaled = scaler.transform(X_test_selected)
+            
+            # Entrenar modelo
+            model.fit(X_train_scaled, y_train)
+            
+            # Guardar scaler y selector
+            self.scalers[model_name] = scaler
+            self.feature_selector[model_name] = selector
+            
+            # Evaluar
+            accuracy = model.score(X_test_scaled, y_test)
+            print(f"Modelo {model_name} - Accuracy: {accuracy:.3f}")
+        
+        self.is_trained = True
+        print("Entrenamiento completado")
+    
+    def predict(self, df, indicators):
+        """Realizar predicción con ensemble mejorado"""
+        if not self.is_trained:
+            return None
+        
+        features = self.prepare_enhanced_features(df, indicators)
+        if len(features) == 0:
+            return None
+        
+        # Obtener última fila de características
+        latest_features = features.iloc[-1:].values
+        
+        # Predicciones de cada modelo
+        predictions = {}
+        for model_name, model in self.models.items():
+            if model_name in self.scalers:
+                selector = self.feature_selector[model_name]
+                scaler = self.scalers[model_name]
+                
+                # Seleccionar y escalar características
+                features_selected = selector.transform(latest_features)
+                features_scaled = scaler.transform(features_selected)
+                
+                # Obtener predicción
+                pred_proba = model.predict_proba(features_scaled)[0]
+                predictions[model_name] = pred_proba
+        
+        # Ensemble ponderado
+        ensemble_pred = np.zeros(2)
+        for model_name, pred in predictions.items():
+            weight = self.model_weights[model_name]
+            ensemble_pred += pred * weight
+        
+        # Calcular métricas adicionales
+        direction = 1 if ensemble_pred[1] > 0.65 else 0
+        confidence = max(ensemble_pred)
+        uncertainty = 1 - abs(ensemble_pred[1] - ensemble_pred[0])
+        
+        return {
+            'direction': direction,
+            'confidence': confidence,
+            'uncertainty': uncertainty,
+            'prediction': 'buy' if direction == 1 else 'sell' if confidence > 0.75 else 'hold',
+            'ensemble_score': ensemble_pred
+        }
+
+# ==================== SISTEMA DE TRADING UNIFICADO OPTIMIZADO ====================
+class OptimizedQuantumFusionTradingSystem:
+    def __init__(self):
+        self.config = GlobalConfig()
+        self.data_fetcher = DataFetcher()
+        self.harmonic_detector = HarmonicPatternDetector()
+        self.ml_predictor = EnhancedMLPredictor()
+        self.weighting_system = DynamicWeightingSystem()
+        self.advanced_indicators = AdvancedIndicators()
+        
+        # Estado del sistema
+        self.positions = {}
+        self.performance_history = []
+        self.capital = self.config.INITIAL_CAPITAL
+        self.peak_capital = self.config.INITIAL_CAPITAL
+        
+        # Métricas mejoradas
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.total_pnl = 0
+        self.strategy_performance = {}
+        
+        # Configurar logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger('OptimizedQuantumFusion')
+        
+    async def initialize(self):
+        """Inicializar el sistema optimizado"""
+        print("Inicializando Optimized Quantum Fusion Trading System...")
+        
+        # Obtener datos históricos para entrenamiento
+        print("Obteniendo datos históricos...")
+        historical_data = await self.fetch_all_historical_data()
+        
+        # Entrenar modelos de ML
+        if historical_data:
+            self.ml_predictor.train_models(historical_data)
+        
+        print("Sistema optimizado inicializado correctamente")
+    
+    async def fetch_all_historical_data(self, days=120):
+        """Obtener datos históricos para todos los pares y temporalidades"""
+        historical_data = []
+        
+        for pair in self.config.PAIRS:
+            for timeframe in self.config.TIMEFRAMES:
+                print(f"Obteniendo datos para {pair} {timeframe}...")
+                df = await self.data_fetcher.fetch_historical_data(pair, timeframe, days*24)
+                if df is not None:
+                    historical_data.append(df)
+                await asyncio.sleep(0.05)
+        
+        return historical_data
+    
+    async def analyze_pair(self, pair):
+        """Analizar un par específico en todas las temporalidades"""
+        analysis_results = {}
+        
+        for timeframe in self.config.TIMEFRAMES:
+            # Obtener datos
+            df = await self.data_fetcher.fetch_historical_data(pair, timeframe, 300)
+            if df is None:
+                continue
+            
+            # Calcular indicadores avanzados
+            indicators = self.advanced_indicators.calculate_all_indicators(df)
+            
+            # Actualizar régimen del mercado
+            self.weighting_system.update_market_regime(indicators)
+            
+            # Detectar patrones armónicos
+            harmonic_signals = []
+            for pattern in self.harmonic_detector.patterns:
+                pattern_result = self.harmonic_detector.detect_harmonic_pattern(df, pattern)
+                if pattern_result:
+                    harmonic_signals.append(pattern_result)
+            
+            # Generar señales de trading mejoradas
+            signals = self.generate_enhanced_trading_signals(df, indicators, harmonic_signals)
+            
+            # Predicción de ML mejorada
+            ml_prediction = self.ml_predictor.predict(df, indicators)
+            
+            analysis_results[timeframe] = {
+                'indicators': indicators,
+                'harmonic_signals': harmonic_signals,
+                'signals': signals,
+                'ml_prediction': ml_prediction,
+                'market_state': self.assess_market_state(indicators),
+                'regime': self.weighting_system.market_regime,
+                'volatility': self.weighting_system.volatility_state
+            }
+        
+        return analysis_results
+    
+    def generate_enhanced_trading_signals(self, df, indicators, harmonic_signals):
+        """Generar señales de trading mejoradas con confirmaciones múltiples"""
+        signals = {}
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        # 1. Estrategia de patrones armónicos (mejorada)
+        if harmonic_signals:
+            for signal in harmonic_signals:
+                strategy_score = self.weighting_system.calculate_strategy_score('harmonic', indicators, signal)
+                if strategy_score >= self.config.MIN_CONFIDENCE:
+                    enhanced_signal = {
+                        'type': signal['type'],
+                        'strategy': 'harmonic',
+                        'entry_price': signal['entry_price'],
+                        'stop_loss': signal['stop_loss'],
+                        'take_profit': signal['take_profit'],
+                        'confidence': strategy_score,
+                        'strategy_score': strategy_score
+                    }
+                    signals['harmonic'] = enhanced_signal
+        
+        # 2. Estrategia de Trend Following (mejorada)
+        trend_signal = self.generate_enhanced_trend_signal(latest, indicators)
+        if trend_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('trend', indicators, trend_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                trend_signal['strategy'] = 'trend'
+                trend_signal['strategy_score'] = strategy_score
+                signals['trend'] = trend_signal
+        
+        # 3. Estrategia de Mean Reversion (mejorada)
+        mr_signal = self.generate_enhanced_mean_reversion_signal(latest, indicators)
+        if mr_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('mean_reversion', indicators, mr_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                mr_signal['strategy'] = 'mean_reversion'
+                mr_signal['strategy_score'] = strategy_score
+                signals['mean_reversion'] = mr_signal
+        
+        # 4. Estrategia de Momentum (mejorada)
+        momentum_signal = self.generate_enhanced_momentum_signal(latest, indicators)
+        if momentum_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('momentum', indicators, momentum_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                momentum_signal['strategy'] = 'momentum'
+                momentum_signal['strategy_score'] = strategy_score
+                signals['momentum'] = momentum_signal
+        
+        # 5. Estrategia de Breakout (mejorada)
+        breakout_signal = self.generate_enhanced_breakout_signal(latest, indicators)
+        if breakout_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('breakout', indicators, breakout_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                breakout_signal['strategy'] = 'breakout'
+                breakout_signal['strategy_score'] = strategy_score
+                signals['breakout'] = breakout_signal
+        
+        # 6. Estrategia de ML Prediction (mejorada)
+        ml_signal = self.generate_enhanced_ml_signal(latest, indicators)
+        if ml_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('ml_prediction', indicators, ml_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                ml_signal['strategy'] = 'ml_prediction'
+                ml_signal['strategy_score'] = strategy_score
+                signals['ml_prediction'] = ml_signal
+        
+        return signals
+    
+    def generate_enhanced_trend_signal(self, latest, indicators):
+        """Generar señal de trend following mejorada"""
+        # Condiciones principales
+        trend_condition = (
+            latest['sma_20'] > latest['sma_50'] and
+            latest['ema_12'] > latest['ema_26'] and
+            latest['adx'] > 25 and
+            latest['trend_strength'] > 0.015
+        )
+        
+        # Confirmaciones adicionales
+        macd_confirmation = latest['macd'] > latest['macd_signal'] and latest['macd_hist'] > 0
+        rsi_confirmation = 45 < latest['rsi'] < 65
+        volume_confirmation = latest['volume_ratio'] > 1.1
+        sar_confirmation = latest['parabolic_sar'] < latest['close']
+        
+        # Contar confirmaciones
+        confirmations = sum([macd_confirmation, rsi_confirmation, volume_confirmation, sar_confirmation])
+        
+        if trend_condition and confirmations >= 3:
+            return {
+                'type': 'trend_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] - latest['atr'] * 1.8,
+                'take_profit': latest['close'] + latest['atr'] * 4.5,
+                'confidence': 0.8 + (confirmations * 0.05)
+            }
+        
+        # Señal bajista
+        trend_condition_short = (
+            latest['sma_20'] < latest['sma_50'] and
+            latest['ema_12'] < latest['ema_26'] and
+            latest['adx'] > 25 and
+            latest['trend_strength'] > 0.015
+        )
+        
+        macd_confirmation_short = latest['macd'] < latest['macd_signal'] and latest['macd_hist'] < 0
+        rsi_confirmation_short = 35 < latest['rsi'] < 55
+        volume_confirmation_short = latest['volume_ratio'] > 1.1
+        sar_confirmation_short = latest['parabolic_sar'] > latest['close']
+        
+        confirmations_short = sum([macd_confirmation_short, rsi_confirmation_short, 
+                                 volume_confirmation_short, sar_confirmation_short])
+        
+        if trend_condition_short and confirmations_short >= 3:
+            return {
+                'type': 'trend_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] + latest['atr'] * 1.8,
+                'take_profit': latest['close'] - latest['atr'] * 4.5,
+                'confidence': 0.8 + (confirmations_short * 0.05)
+            }
+        
+        return None
+    
+    def generate_enhanced_mean_reversion_signal(self, latest, indicators):
+        """Generar señal de mean reversion mejorada"""
+        # Condiciones principales para sobreventa
+        oversold_condition = (
+            latest['close'] < latest['bb_lower'] and
+            latest['rsi'] < 30 and
+            latest['stoch_k'] < 20 and
+            latest['cci'] < -150
+        )
+        
+        # Confirmaciones adicionales
+        williams_confirmation = latest['williams_r'] < -80
+        mfi_confirmation = latest['mfi'] < 25
+        volume_confirmation = latest['volume_ratio'] > 0.8
+        support_confirmation = latest['close'] < latest['support'] * 1.01
+        
+        confirmations = sum([williams_confirmation, mfi_confirmation, volume_confirmation, support_confirmation])
+        
+        if oversold_condition and confirmations >= 2:
+            return {
+                'type': 'mean_reversion_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] - latest['atr'] * 0.8,
+                'take_profit': latest['bb_middle'],
+                'confidence': 0.75 + (confirmations * 0.05)
+            }
+        
+        # Condiciones principales para sobrecompra
+        overbought_condition = (
+            latest['close'] > latest['bb_upper'] and
+            latest['rsi'] > 70 and
+            latest['stoch_k'] > 80 and
+            latest['cci'] > 150
+        )
+        
+        williams_confirmation_short = latest['williams_r'] > -20
+        mfi_confirmation_short = latest['mfi'] > 75
+        volume_confirmation_short = latest['volume_ratio'] > 0.8
+        resistance_confirmation = latest['close'] > latest['resistance'] * 0.99
+        
+        confirmations_short = sum([williams_confirmation_short, mfi_confirmation_short, 
+                                 volume_confirmation_short, resistance_confirmation])
+        
+        if overbought_condition and confirmations_short >= 2:
+            return {
+                'type': 'mean_reversion_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] + latest['atr'] * 0.8,
+                'take_profit': latest['bb_middle'],
+                'confidence': 0.75 + (confirmations_short * 0.05)
+            }
+        
+        return None
+    
+    def generate_enhanced_momentum_signal(self, latest, indicators):
+        """Generar señal de momentum mejorada"""
+        # Condiciones principales para momentum alcista
+        momentum_condition = (
+            latest['macd_hist'] > 0 and
+            latest['rsi'] > 55 and
+            latest['stoch_k'] > 60 and
+            latest['roc'] > 2
+        )
+        
+        # Confirmaciones adicionales
+        mfi_confirmation = latest['mfi'] > 60
+        volume_confirmation = latest['volume_ratio'] > 1.5
+        trend_confirmation = latest['adx'] > 20
+        pattern_confirmation = latest['hammer'] > 0 or latest['engulfing'] > 0
+        
+        confirmations = sum([mfi_confirmation, volume_confirmation, trend_confirmation, pattern_confirmation])
+        
+        if momentum_condition and confirmations >= 2:
+            return {
+                'type': 'momentum_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] - latest['atr'] * 1.3,
+                'take_profit': latest['close'] + latest['atr'] * 2.8,
+                'confidence': 0.8 + (confirmations * 0.05)
+            }
+        
+        # Condiciones principales para momentum bajista
+        momentum_condition_short = (
+            latest['macd_hist'] < 0 and
+            latest['rsi'] < 45 and
+            latest['stoch_k'] < 40 and
+            latest['roc'] < -2
+        )
+        
+        mfi_confirmation_short = latest['mfi'] < 40
+        volume_confirmation_short = latest['volume_ratio'] > 1.5
+        trend_confirmation_short = latest['adx'] > 20
+        pattern_confirmation_short = latest['engulfing'] < 0
+        
+        confirmations_short = sum([mfi_confirmation_short, volume_confirmation_short, 
+                                 trend_confirmation_short, pattern_confirmation_short])
+        
+        if momentum_condition_short and confirmations_short >= 2:
+            return {
+                'type': 'momentum_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] + latest['atr'] * 1.3,
+                'take_profit': latest['close'] - latest['atr'] * 2.8,
+                'confidence': 0.8 + (confirmations_short * 0.05)
+            }
+        
+        return None
+    
+    def generate_enhanced_breakout_signal(self, latest, indicators):
+        """Generar señal de breakout mejorada"""
+        # Condiciones principales para breakout alcista
+        breakout_condition = (
+            latest['close'] > latest['bb_upper'] and
+            latest['volume_ratio'] > 2.0 and
+            latest['adx'] > 30
+        )
+        
+        # Confirmaciones adicionales
+        atr_confirmation = latest['atr'] > latest['atr_7'] * 1.2
+        volatility_confirmation = latest['volatility_regime'] > 1.3
+        donchian_confirmation = latest['close'] > latest['donchian_upper']
+        trend_confirmation = latest['trend_strength'] > 0.02
+        
+        confirmations = sum([atr_confirmation, volatility_confirmation, donchian_confirmation, trend_confirmation])
+        
+        if breakout_condition and confirmations >= 2:
+            return {
+                'type': 'breakout_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['bb_upper'],
+                'take_profit': latest['close'] + (latest['bb_upper'] - latest['bb_lower']) * 0.6,
+                'confidence': 0.85 + (confirmations * 0.03)
+            }
+        
+        # Condiciones principales para breakout bajista
+        breakout_condition_short = (
+            latest['close'] < latest['bb_lower'] and
+            latest['volume_ratio'] > 2.0 and
+            latest['adx'] > 30
+        )
+        
+        atr_confirmation_short = latest['atr'] > latest['atr_7'] * 1.2
+        volatility_confirmation_short = latest['volatility_regime'] > 1.3
+        donchian_confirmation_short = latest['close'] < latest['donchian_lower']
+        trend_confirmation_short = latest['trend_strength'] > 0.02
+        
+        confirmations_short = sum([atr_confirmation_short, volatility_confirmation_short, 
+                                 donchian_confirmation_short, trend_confirmation_short])
+        
+        if breakout_condition_short and confirmations_short >= 2:
+            return {
+                'type': 'breakout_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['bb_lower'],
+                'take_profit': latest['close'] - (latest['bb_upper'] - latest['bb_lower']) * 0.6,
+                'confidence': 0.85 + (confirmations_short * 0.03)
+            }
+        
+        return None
+    
+    def generate_enhanced_ml_signal(self, latest, indicators, ml_prediction=None):
+        """Generar señal basada en ML mejorada"""
+        if ml_prediction is None:
+            return None
+        
+        # Solo generar señal si la confianza es alta y la incertidumbre es baja
+        if (ml_prediction['confidence'] > 0.75 and 
+            ml_prediction['uncertainty'] < 0.3 and
+            ml_prediction['prediction'] != 'hold'):
+            
+            # Calcular niveles de stop loss y take profit basados en ATR
+            atr = latest['atr']
+            
+            if ml_prediction['prediction'] == 'buy':
+                return {
+                    'type': 'ml_long',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] - atr * 1.0,
+                    'take_profit': latest['close'] + atr * 3.2,
+                    'confidence': ml_prediction['confidence'],
+                    'ml_data': ml_prediction
+                }
+            else:
+                return {
+                    'type': 'ml_short',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] + atr * 1.0,
+                    'take_profit': latest['close'] - atr * 3.2,
+                    'confidence': ml_prediction['confidence'],
+                    'ml_data': ml_prediction
+                }
+        
+        return None
+    
+    def assess_market_state(self, indicators):
+        """Evaluar estado del mercado con más precisión"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        volatility = latest['atr'] / latest['close']
+        trend_strength = latest['trend_strength']
+        volume_activity = latest['volume_ratio']
+        
+        # Clasificación más detallada
+        if volatility > 0.04:
+            if trend_strength > 0.03:
+                return 'high_volatility_trending'
+            else:
+                return 'high_volatility_choppy'
+        elif trend_strength > 0.025:
+            return 'strong_trending'
+        elif trend_strength > 0.015:
+            return 'moderate_trending'
+        elif volume_activity < 0.7:
+            return 'low_volume_consolidation'
+        else:
+            return 'ranging'
+    
+    async def execute_trading_cycle(self):
+        """Ejecutar un ciclo completo de trading optimizado"""
+        print("Iniciando ciclo de trading optimizado...")
+        
+        # Analizar todos los pares
+        all_signals = []
+        
+        for pair in self.config.PAIRS:
+            analysis = await self.analyze_pair(pair)
+            
+            # Procesar señales de todas las temporalidades
+            for timeframe, data in analysis.items():
+                signals = data['signals']
+                ml_prediction = data['ml_prediction']
+                market_state = data['market_state']
+                regime = data['regime']
+                volatility = data['volatility']
+                
+                for strategy, signal in signals.items():
+                    # Calcular peso final de la señal
+                    final_weight = self.calculate_final_signal_weight(
+                        signal, market_state, regime, volatility, ml_prediction
+                    )
+                    
+                    # Filtrar por confianza mínima
+                    if final_weight >= self.config.MIN_CONFIDENCE:
+                        enhanced_signal = {
+                            'pair': pair,
+                            'timeframe': timeframe,
+                            'strategy': strategy,
+                            'weight': final_weight,
+                            'market_state': market_state,
+                            'regime': regime,
+                            'volatility': volatility,
+                            **signal
+                        }
+                        all_signals.append(enhanced_signal)
+        
+        # Optimizar portafolio y ejecutar operaciones
+        await self.optimize_and_execute(all_signals)
+        
+        # Monitorear posiciones existentes
+        await self.monitor_positions()
+        
+        # Actualizar rendimiento
+        self.update_performance()
+        
+        print(f"Ciclo optimizado completado. Señales generadas: {len(all_signals)}")
+    
+    def calculate_final_signal_weight(self, signal, market_state, regime, volatility, ml_prediction):
+        """Calcular peso final de la señal con múltiples factores"""
+        weight = signal['strategy_score']
+        
+        # Ajuste por estado del mercado
+        market_adjustments = {
+            'high_volatility_trending': 1.1,
+            'strong_trending': 1.2,
+            'moderate_trending': 1.1,
+            'ranging': 1.0,
+            'low_volume_consolidation': 0.9,
+            'high_volatility_choppy': 0.8
+        }
+        
+        weight *= market_adjustments.get(market_state, 1.0)
+        
+        # Ajuste por régimen
+        if signal['strategy'] == 'trend' and regime == 'trending':
+            weight *= 1.15
+        elif signal['strategy'] == 'mean_reversion' and regime == 'ranging':
+            weight *= 1.15
+        elif signal['strategy'] == 'breakout' and volatility == 'high':
+            weight *= 1.1
+        
+        # Ajuste por predicción de ML
+        if ml_prediction and ml_prediction['confidence'] > 0.7:
+            if ((signal['type'].endswith('long') and ml_prediction['direction'] == 1) or
+                (signal['type'].endswith('short') and ml_prediction['direction'] == 0)):
+                weight *= (1 + ml_prediction['confidence'] * 0.2)
+        
+        return min(weight, 1.0)
+    
+    async def optimize_and_execute(self, signals):
+        """Optimizar portafolio y ejecutar operaciones"""
+        if not signals:
+            return
+        
+        # Ordenar señales por peso y estrategia
+        signals.sort(key=lambda x: (x['weight'], x['strategy_score']), reverse=True)
+        
+        # Seleccionar mejores señales con diversificación
+        selected_signals = self.select_diversified_signals(signals)
+        
+        for signal in selected_signals:
+            # Calcular tamaño de posición optimizado
+            position_size = self.calculate_optimal_position_size(signal)
+            
+            # Ejecutar operación
+            await self.execute_trade(signal, position_size)
+    
+    def select_diversified_signals(self, signals):
+        """Seleccionar señales con diversificación óptima"""
+        selected = []
+        used_pairs = set()
+        used_strategies = {}
+        
+        for signal in signals:
+            pair = signal['pair']
+            strategy = signal['strategy']
+            
+            # Limitar por par
+            if pair in used_pairs and len([s for s in selected if s['pair'] == pair]) >= 2:
+                continue
+            
+            # Limitar por estrategia
+            if strategy in used_strategies:
+                if used_strategies[strategy] >= 2:
+                    continue
+                used_strategies[strategy] += 1
+            else:
+                used_strategies[strategy] = 1
+            
+            # Limitar total de posiciones
+            if len(selected) >= self.config.MAX_POSITIONS:
+                break
+            
+            selected.append(signal)
+            used_pairs.add(pair)
+        
+        return selected
+    
+    def calculate_optimal_position_size(self, signal):
+        """Calcular tamaño de posición óptimo"""
+        strategy_config = self.config.STRATEGY_RISK[signal['strategy']]
+        
+        # Ajustar riesgo según confianza
+        risk_adjustment = signal['weight']
+        base_risk = self.config.RISK_PER_TRADE * risk_adjustment
+        
+        # Calcular riesgo monetario
+        risk_amount = self.capital * base_risk
+        
+        # Calcular distancia de stop loss
+        stop_distance = abs(signal['entry_price'] - signal['stop_loss'])
+        
+        # Calcular tamaño base
+        base_size = risk_amount / stop_distance
+        
+        # Aplicar apalancamiento según estrategia
+        leveraged_size = base_size * strategy_config['leverage']
+        
+        # Limitar tamaño máximo por posición
+        max_size = self.capital * 0.08 / signal['entry_price']
+        
+        # Ajustar por volatilidad
+        volatility_adjustment = 1.0
+        if signal['volatility'] == 'high':
+            volatility_adjustment = 0.8
+        elif signal['volatility'] == 'low':
+            volatility_adjustment = 1.1
+        
+        final_size = min(leveraged_size, max_size) * volatility_adjustment
+        
+        return max(final_size, 0.001)  # Mínimo 0.001
+    
+    async def execute_trade(self, signal, position_size):
+        """Ejecutar una operación"""
+        pair = signal['pair']
+        strategy = signal['strategy']
+        
+        try:
+            # Obtener precio actual
+            ticker = self.data_fetcher.exchanges['binance'].fetch_ticker(pair)
+            current_price = ticker['last']
+            
+            # Determinar lado
+            side = 'buy' if signal['type'].endswith('long') else 'sell'
+            
+            # Crear ID de posición
+            position_id = f"{pair}_{strategy}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            # Registrar posición
+            self.positions[position_id] = {
+                'id': position_id,
+                'pair': pair,
+                'strategy': strategy,
+                'side': side,
+                'entry_price': current_price,
+                'size': position_size,
+                'stop_loss': signal['stop_loss'],
+                'take_profit': signal['take_profit'],
+                'weight': signal['weight'],
+                'market_state': signal['market_state'],
+                'entry_time': datetime.now(),
+                'status': 'open',
+                'pnl': 0,
+                'max_profit': 0
+            }
+            
+            print(f"Operación ejecutada: {side} {position_size:.4f} {pair} @ {current_price} "
+                  f"(Confianza: {signal['weight']:.2f})")
+            
+        except Exception as e:
+            print(f"Error ejecutando operación: {e}")
+    
+    async def monitor_positions(self):
+        """Monitorear posiciones abiertas con trailing stop"""
+        positions_to_close = []
+        
+        for position_id, position in self.positions.items():
+            if position['status'] != 'open':
+                continue
+            
+            pair = position['pair']
+            try:
+                # Obtener precio actual
+                ticker = self.data_fetcher.exchanges['binance'].fetch_ticker(pair)
+                current_price = ticker['last']
+                
+                # Calcular P&L
+                if position['side'] == 'buy':
+                    pnl = (current_price - position['entry_price']) * position['size']
+                else:
+                    pnl = (position['entry_price'] - current_price) * position['size']
+                
+                position['current_price'] = current_price
+                position['pnl'] = pnl
+                
+                # Actualizar máximo beneficio
+                if pnl > position['max_profit']:
+                    position['max_profit'] = pnl
+                
+                # Implementar trailing stop
+                if position['max_profit'] > 0:
+                    trailing_distance = abs(position['entry_price'] - position['stop_loss']) * 0.5
+                    
+                    if position['side'] == 'buy':
+                        new_stop_loss = current_price - trailing_distance
+                        if new_stop_loss > position['stop_loss']:
+                            position['stop_loss'] = new_stop_loss
+                    else:
+                        new_stop_loss = current_price + trailing_distance
+                        if new_stop_loss < position['stop_loss']:
+                            position['stop_loss'] = new_stop_loss
+                
+                # Verificar condiciones de cierre
+                should_close = False
+                close_reason = ""
+                
+                if position['side'] == 'buy' and current_price <= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                elif position['side'] == 'sell' and current_price >= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                elif position['side'] == 'buy' and current_price >= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                elif position['side'] == 'sell' and current_price <= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                
+                if should_close:
+                    positions_to_close.append((position_id, close_reason))
+                
+            except Exception as e:
+                print(f"Error monitoreando posición {position_id}: {e}")
+        
+        # Cerrar posiciones
+        for position_id, reason in positions_to_close:
+            await self.close_position(position_id, reason)
+    
+    async def close_position(self, position_id, reason):
+        """Cerrar una posición y actualizar métricas"""
+        if position_id not in self.positions:
+            return
+        
+        position = self.positions[position_id]
+        
+        # Actualizar estado
+        position['status'] = 'closed'
+        position['close_time'] = datetime.now()
+        position['close_reason'] = reason
+        
+        # Actualizar capital
+        self.capital += position['pnl']
+        
+        # Actualizar métricas generales
+        self.total_trades += 1
+        if position['pnl'] > 0:
+            self.winning_trades += 1
+        self.total_pnl += position['pnl']
+        
+        # Actualizar métricas por estrategia
+        strategy = position['strategy']
+        if strategy not in self.strategy_performance:
+            self.strategy_performance[strategy] = {
+                'trades': 0, 'wins': 0, 'total_pnl': 0
+            }
+        
+        self.strategy_performance[strategy]['trades'] += 1
+        if position['pnl'] > 0:
+            self.strategy_performance[strategy]['wins'] += 1
+        self.strategy_performance[strategy]['total_pnl'] += position['pnl']
+        
+        # Mover a historial
+        self.performance_history.append(position)
+        
+        # Eliminar de posiciones activas
+        del self.positions[position_id]
+        
+        print(f"Posición cerrada: {position_id} - {reason} - P&L: ${position['pnl']:.2f}")
+    
+    def update_performance(self):
+        """Actualizar métricas de rendimiento detalladas"""
+        if self.capital > self.peak_capital:
+            self.peak_capital = self.capital
+        
+        win_rate = self.winning_trades / self.total_trades if self.total_trades > 0 else 0
+        current_drawdown = (self.peak_capital - self.capital) / self.peak_capital
+        
+        print("\n=== Rendimiento Optimizado Quantum Fusion ===")
+        print(f"Capital: ${self.capital:,.2f}")
+        print(f"Operaciones: {self.total_trades}")
+        print(f"Win Rate: {win_rate:.2%}")
+        print(f"P&L Total: ${self.total_pnl:,.2f}")
+        print(f"Drawdown Actual: {current_drawdown:.2%}")
+        print(f"Posiciones abiertas: {len(self.positions)}")
+        
+        # Rendimiento por estrategia
+        print("\nRendimiento por Estrategia:")
+        for strategy, perf in self.strategy_performance.items():
+            strategy_win_rate = perf['wins'] / perf['trades'] if perf['trades'] > 0 else 0
+            print(f"  {strategy}: {perf['trades']} trades, {strategy_win_rate:.2%} win rate, "
+                  f"${perf['total_pnl']:,.2f} P&L")
+        
+        print("============================================\n")
+    
+    async def run(self, interval_minutes=3):
+        """Ejecutar el sistema continuamente con intervalo optimizado"""
+        await self.initialize()
+        
+        print(f"Iniciando Optimized Quantum Fusion Trading System con intervalo de {interval_minutes} minutos")
+        
+        while True:
+            try:
+                start_time = time.time()
+                
+                # Ejecutar ciclo de trading
+                await self.execute_trading_cycle()
+                
+                # Calcular tiempo de espera
+                elapsed = time.time() - start_time
+                wait_time = max(0, interval_minutes * 60 - elapsed)
+                
+                print(f"Esperando {wait_time/60:.1f} minutos hasta el siguiente ciclo...")
+                await asyncio.sleep(wait_time)
+                
+            except KeyboardInterrupt:
+                print("\nDeteniendo Optimized Quantum Fusion Trading System...")
+                break
+            except Exception as e:
+                print(f"Error en ciclo de trading: {e}")
+                await asyncio.sleep(60)
+
+# ==================== EJECUCIÓN PRINCIPAL ====================
+async def main():
+    """Función principal"""
+    trading_system = OptimizedQuantumFusionTradingSystem()
+    await trading_system.run(interval_minutes=3)
+
+if __name__ == "__main__":
+    asyncio.run(main())

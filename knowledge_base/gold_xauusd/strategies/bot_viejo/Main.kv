@@ -1,0 +1,33 @@
+#:kivy 2.2.0
+
+ScreenManager:
+    id: screen_manager
+    ScreenOne:
+        name: 'screen_one'
+    ScreenTwo:
+        name: 'screen_two'
+
+<ScreenOne>:
+    BoxLayout:
+        orientation: 'vertical'
+        Label:
+            text: 'Pantalla 1'
+        Button:
+            text: 'Ir a la pantalla 2'
+            on_release:
+                app.root.current = 'screen_two'
+                app.root.transition.direction = 'left'
+
+<ScreenTwo>:
+    BoxLayout:
+        orientation: 'vertical'
+        Label:
+            text: 'Pantalla 2'
+        Button:
+            text: 'Ir a la pantalla 1'
+            on_release:
+                app.root.current = 'screen_one'
+                app.root.transition.direction = 'right'
+
+
+

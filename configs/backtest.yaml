@@ -1,0 +1,25 @@
+# configs/backtest.yaml — backtest execution configuration
+
+portfolio:
+  init_cash: 100_000         # starting equity in USD
+  fees: 0.0002               # 0.02 % per trade (round-trip * 2)
+  slippage: 0.0001           # 0.01 % per fill (applied to price)
+  size: 1.0                  # fraction of available cash per signal (1 = all-in)
+  size_type: "percent"       # percent | value | shares
+  freq: null                 # infer from data index (leave null)
+
+strategy:
+  name: "ma_cross"
+  fast_window: 20
+  slow_window: 50
+  ma_type: "simple"          # simple | exponential
+
+data:
+  timeframe: "1D"            # subfolder in data/ — must exist after data_pipeline run
+  parquet: "data/{timeframe}/gold.parquet"
+
+output:
+  results_dir: "results"
+  stats_csv: "results/{run_id}_stats.csv"
+  equity_html: "results/{run_id}_equity.html"
+  # run_id is auto-generated as: {strategy}_{timeframe}_{fast}x{slow}_{date}

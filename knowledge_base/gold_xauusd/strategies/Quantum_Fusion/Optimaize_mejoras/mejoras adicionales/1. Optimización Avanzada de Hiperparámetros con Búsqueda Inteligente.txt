@@ -1,0 +1,86 @@
+1. Optimización Avanzada de Hiperparámetros con Búsqueda Inteligente
+
+class HyperparameterOptimizer:
+    def __init__(self):
+        self.best_params = {}
+        self.optimization_history = []
+    
+    def bayesian_optimization(self, X, y, model_type='xgboost'):
+        """Optimización bayesiana de hiperparámetros"""
+        from skopt import BayesSearchCV
+        from skopt.space import Real, Integer, Categorical
+        
+        if model_type == 'xgboost':
+            search_space = {
+                'n_estimators': Integer(50, 300),
+                'max_depth': Integer(3, 10),
+                'learning_rate': Real(0.01, 0.3, 'log-uniform'),
+                'subsample': Real(0.6, 1.0),
+                'colsample_bytree': Real(0.6, 1.0),
+                'reg_alpha': Real(0.0, 1.0),
+                'reg_lambda': Real(0.0, 1.0)
+            }
+            model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        
+        elif model_type == 'lightgbm':
+            search_space = {
+                'n_estimators': Integer(50, 300),
+                'max_depth': Integer(3, 10),
+                'learning_rate': Real(0.01, 0.3, 'log-uniform'),
+                'subsample': Real(0.6, 1.0),
+                'colsample_bytree': Real(0.6, 1.0),
+                'reg_alpha': Real(0.0, 1.0),
+                'reg_lambda': Real(0.0, 1.0)
+            }
+            model = lgb.LGBMClassifier(verbose=-1)
+        
+        opt = BayesSearchCV(
+            model,
+            search_space,
+            n_iter=50,
+            cv=TimeSeriesSplit(n_splits=5),
+            scoring='accuracy',
+            n_jobs=-1,
+            random_state=42
+        )
+        
+        opt.fit(X, y)
+        self.best_params[model_type] = opt.best_params_
+        self.optimization_history.append(opt.cv_results_)
+        
+        return opt.best_estimator_, opt.best_score_
+    
+    def genetic_algorithm_optimization(self, X, y, model_type='xgboost'):
+        """Optimización con algoritmos genéticos"""
+        from sklearn_genetic import GASearchCV
+        from sklearn_genetic.space import Continuous, Integer, Categorical
+        
+        if model_type == 'xgboost':
+            param_grid = {
+                'n_estimators': Integer(50, 300),
+                'max_depth': Integer(3, 10),
+                'learning_rate': Continuous(0.01, 0.3),
+                'subsample': Continuous(0.6, 1.0),
+                'colsample_bytree': Continuous(0.6, 1.0),
+                'reg_alpha': Continuous(0.0, 1.0),
+                'reg_lambda': Continuous(0.0, 1.0)
+            }
+            model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        
+        evolved_estimator = GASearchCV(
+            model,
+            cv=TimeSeriesSplit(n_splits=5),
+            scoring='accuracy',
+            population_size=20,
+            generations=20,
+            param_grid=param_grid,
+            criteria='max',
+            algorithm='eaMuPlusLambda',
+            n_jobs=-1,
+            verbose=False
+        )
+        
+        evolved_estimator.fit(X, y)
+        self.best_params[model_type] = evolved_estimator.best_params_
+        
+        return evolved_estimator.best_estimator_, evolved_estimator.best_score_

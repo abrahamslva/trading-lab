@@ -1,0 +1,82 @@
+import tweepy
+import praw
+import requests
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import pandas as pd
+from datetime import datetime, timedelta
+
+class SentimentAnalyzerLite:
+    def __init__(self, config):
+        self.vader = SentimentIntensityAnalyzer()
+        self.twitter_config = config['twitter']
+        self.reddit_config = config['reddit']
+        self.news_config = config['news']
+        
+        # Inicializar APIs
+        self.twitter_client = tweepy.Client(bearer_token=self.twitter_config['bearer_token'])
+        self.reddit = praw.Reddit(
+            client_id=self.reddit_config['client_id'],
+            client_secret=self.reddit_config['client_secret'],
+            user_agent="quantum_fusion_lite"
+        )
+    
+    def get_twitter_sentiment(self, query, count=100):
+        """Obtener sentimiento de Twitter"""
+        tweets = tweepy.Paginator(
+            self.twitter_client.search_recent_tweets,
+            query=query,
+            tweet_fields=["created_at"],
+            max_results=100
+        ).flatten(limit=count)
+        
+        sentiments = []
+        for tweet in tweets:
+            sentiment = self.vader.polarity_scores(tweet.text)
+            sentiments.append({
+                'timestamp': tweet.created_at,
+                'compound': sentiment['compound']
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def get_reddit_sentiment(self, subreddit, limit=50):
+        """Obtener sentimiento de Reddit"""
+        sentiments = []
+        for submission in self.reddit.subreddit(subreddit).hot(limit=limit):
+            sentiment = self.vader.polarity_scores(submission.title)
+            sentiments.append({
+                'timestamp': datetime.fromtimestamp(submission.created_utc),
+                'compound': sentiment['compound']
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def get_news_sentiment(self, query, days=7):
+        """Obtener sentimiento de noticias"""
+        url = f"https://newsapi.org/v2/everything?q={query}&from={(datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')}&sortBy=publishedAt&apiKey={self.news_config['api_key']}"
+        response = requests.get(url)
+        articles = response.json().get('articles', [])
+        
+        sentiments = []
+        for article in articles:
+            sentiment = self.vader.polarity_scores(article['title'])
+            sentiments.append({
+                'timestamp': article['publishedAt'],
+                'compound': sentiment['compound']
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def aggregate_sentiment(self, dataframes):
+        """Agrega sentimientos de múltiples fuentes"""
+        df = pd.concat(dataframes)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.set_index('timestamp')
+        
+        # Resample a 1 hora y calcular el sentimiento promedio
+        hourly_sentiment = df.resample('1H')['compound'].mean()
+        
+        # Suavizar con media móvil
+        smoothed_sentiment = hourly_sentiment.rolling(3).mean()
+        
+        return smoothed_sentiment.fillna(0)

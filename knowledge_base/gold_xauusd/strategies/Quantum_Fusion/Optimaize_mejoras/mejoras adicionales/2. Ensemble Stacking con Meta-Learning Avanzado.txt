@@ -1,0 +1,133 @@
+2. Ensemble Stacking con Meta-Learning Avanzado
+
+class AdvancedEnsembleModel:
+    def __init__(self):
+        self.base_models = {}
+        self.meta_learners = {}
+        self.stack_levels = 2
+        self.performance_history = []
+    
+    def create_diverse_models(self):
+        """Crear modelos diversos para mejor ensemble"""
+        self.base_models = {
+            # Modelos basados en árboles
+            'xgboost_tuned': xgb.XGBClassifier(
+                n_estimators=200, max_depth=6, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8, random_state=42
+            ),
+            'lightgbm_tuned': lgb.LGBMClassifier(
+                n_estimators=200, max_depth=6, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8, random_state=42, verbose=-1
+            ),
+            'catboost': None,  # Se añadiría si está disponible
+            
+            # Modelos lineales
+            'logistic_regression': LogisticRegression(random_state=42, max_iter=1000),
+            'ridge_classifier': None,  # from sklearn.linear_model import RidgeClassifier
+            
+            # Modelos de ensamble
+            'random_forest': RandomForestClassifier(
+                n_estimators=200, max_depth=8, min_samples_split=10, random_state=42
+            ),
+            'extra_trees': None,  # from sklearn.ensemble import ExtraTreesClassifier
+            
+            # Modelos de vecinos
+            'knn': None,  # from sklearn.neighbors import KNeighborsClassifier
+            
+            # Modelos de SVM
+            'svm': None,  # from sklearn.svm import SVC
+        }
+    
+    def multi_level_stacking(self, X, y):
+        """Ensemble de múltiples niveles con meta-learning"""
+        from sklearn.model_selection import cross_val_predict
+        
+        # Nivel 1: Predicciones de modelos base
+        level1_predictions = pd.DataFrame(index=X.index)
+        
+        for name, model in self.base_models.items():
+            if model is not None:
+                try:
+                    # Predicciones con validación cruzada para evitar overfitting
+                    preds = cross_val_predict(
+                        model, X, y, cv=TimeSeriesSplit(n_splits=5),
+                        method='predict_proba', n_jobs=-1
+                    )[:, 1]
+                    level1_predictions[f'{name}_pred'] = preds
+                    
+                    # Entrenar el modelo en todos los datos
+                    model.fit(X, y)
+                except Exception as e:
+                    print(f"Error en modelo {name}: {e}")
+        
+        # Añadir características originales seleccionadas
+        level1_features = pd.concat([level1_predictions, X], axis=1)
+        
+        # Nivel 2: Meta-learner
+        meta_features = level1_predictions.copy()
+        
+        # Crear características de interacción entre predicciones
+        for i, col1 in enumerate(level1_predictions.columns):
+            for j, col2 in enumerate(level1_predictions.columns[i+1:], i+1):
+                meta_features[f'{col1}_x_{col2}'] = level1_predictions[col1] * level1_predictions[col2]
+                meta_features[f'{col1}_div_{col2}'] = level1_predictions[col1] / (level1_predictions[col2] + 1e-10)
+        
+        # Entrenar meta-learners diversificados
+        self.meta_learners = {
+            'meta_lr': LogisticRegression(random_state=42),
+            'meta_rf': RandomForestClassifier(n_estimators=100, random_state=42),
+            'meta_gb': GradientBoostingClassifier(n_estimators=100, random_state=42)
+        }
+        
+        meta_predictions = pd.DataFrame(index=X.index)
+        for name, meta_model in self.meta_learners.items():
+            try:
+                meta_preds = cross_val_predict(
+                    meta_model, meta_features, y, cv=TimeSeriesSplit(n_splits=5),
+                    method='predict_proba', n_jobs=-1
+                )[:, 1]
+                meta_predictions[f'{name}_meta'] = meta_preds
+                meta_model.fit(meta_features, y)
+            except Exception as e:
+                print(f"Error en meta-learner {name}: {e}")
+        
+        # Nivel 3: Meta-meta-learner (combinación final)
+        final_meta = LogisticRegression(random_state=42)
+        final_meta.fit(meta_predictions, y)
+        
+        return final_meta, meta_predictions.columns
+    
+    def predict_with_uncertainty(self, X):
+        """Predicción con estimación de incertidumbre"""
+        level1_preds = pd.DataFrame()
+        
+        for name, model in self.base_models.items():
+            if model is not None:
+                try:
+                    preds = model.predict_proba(X)[:, 1]
+                    level1_preds[f'{name}_pred'] = preds
+                except:
+                    level1_preds[f'{name}_pred'] = 0.5
+        
+        # Meta características
+        meta_features = level1_preds.copy()
+        for i, col1 in enumerate(level1_preds.columns):
+            for j, col2 in enumerate(level1_preds.columns[i+1:], i+1):
+                meta_features[f'{col1}_x_{col2}'] = level1_preds[col1] * level1_preds[col2]
+        
+        # Predicciones de meta-learners
+        meta_preds = pd.DataFrame()
+        for name, meta_model in self.meta_learners.items():
+            try:
+                preds = meta_model.predict_proba(meta_features)[:, 1]
+                meta_preds[f'{name}_meta'] = preds
+            except:
+                meta_preds[f'{name}_meta'] = 0.5
+        
+        # Predicción final
+        final_pred = self.final_meta.predict_proba(meta_preds)[:, 1]
+        
+        # Calcular incertidumbre (desviación estándar de predicciones)
+        uncertainty = np.std([final_pred] + [preds[:, 1] for preds in [meta_preds.values.T]], axis=0)
+        
+        return final_pred, uncertainty

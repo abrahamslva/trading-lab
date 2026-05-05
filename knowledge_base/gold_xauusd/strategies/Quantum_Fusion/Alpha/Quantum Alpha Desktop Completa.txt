@@ -1,0 +1,1829 @@
+Quantum Alpha Desktop Completa
+
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+import ccxt
+import asyncio
+import websockets
+import json
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==================== CLASES MEJORADAS ====================
+
+class EnhancedMarketAnalyzer:
+    def __init__(self):
+        self.indicators_cache = {}
+        self.btc_data = None
+        
+    async def analyze_multiple_timeframes(self, symbol):
+        """
+        Analizar múltiples timeframes para mayor precisión
+        """
+        timeframes = ['1h', '4h', '1d']
+        timeframe_analysis = {}
+        
+        for tf in timeframes:
+            analysis = self.analyze_market_state(symbol, tf, lookback=100)
+            if analysis:
+                timeframe_analysis[tf] = analysis
+        
+        # Confirmación de tendencia en múltiples timeframes
+        if self.confirm_trend_alignment(timeframe_analysis):
+            return timeframe_analysis
+        
+        return None
+    
+    def confirm_trend_alignment(self, timeframe_analysis):
+        """
+        Confirmar alineación de tendencias en múltiples timeframes
+        """
+        if not timeframe_analysis:
+            return False
+        
+        # Verificar si hay tendencia consistente en 1h y 4h
+        tf_1h = timeframe_analysis.get('1h', {}).get('regime')
+        tf_4h = timeframe_analysis.get('4h', {}).get('regime')
+        
+        # Ambos timeframes deben estar en trending o ranging
+        if tf_1h == 'trending' and tf_4h == 'trending':
+            return True
+        elif tf_1h == 'ranging' and tf_4h == 'ranging':
+            return True
+        
+        return False
+    
+    def analyze_market_state(self, symbol, timeframe='1h', lookback=100):
+        """
+        Análisis de mercado mejorado
+        """
+        try:
+            # Obtener datos del exchange
+            exchange = ccxt.binance()
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=lookback)
+            
+            # Convertir a DataFrame
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Calcular indicadores técnicos
+            indicators = self.calculate_indicators(df)
+            
+            # Detectar patrones de velas
+            candle_patterns = self.detect_candlestick_patterns(df)
+            
+            # Detectar régimen de mercado
+            regime = self.detect_market_regime(indicators)
+            
+            # Calcular señales múltiples con confirmación
+            signals = self.generate_trading_signals(indicators, regime, candle_patterns)
+            
+            return {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'indicators': indicators,
+                'regime': regime,
+                'signals': signals,
+                'candle_patterns': candle_patterns,
+                'market_state': self.assess_market_state(indicators, regime)
+            }
+            
+        except Exception as e:
+            print(f"Error en análisis de mercado: {e}")
+            return None
+    
+    def detect_candlestick_patterns(self, df):
+        """
+        Detectar patrones de velas para mejorar precisión
+        """
+        patterns = {}
+        
+        # Patrones alcistas
+        patterns['hammer'] = self.detect_hammer(df)
+        patterns['engulfing_bullish'] = self.detect_bullish_engulfing(df)
+        patterns['morning_star'] = self.detect_morning_star(df)
+        
+        # Patrones bajistas
+        patterns['shooting_star'] = self.detect_shooting_star(df)
+        patterns['engulfing_bearish'] = self.detect_bearish_engulfing(df)
+        patterns['evening_star'] = self.detect_evening_star(df)
+        
+        return patterns
+    
+    def detect_hammer(self, df):
+        """Detectar patrón Hammer"""
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        # Cuerpo pequeño en la parte superior
+        body_size = abs(current['close'] - current['open'])
+        total_range = current['high'] - current['low']
+        
+        # Sombra inferior al menos 2x el cuerpo
+        lower_shadow = current['close'] - current['low'] if current['close'] > current['open'] else current['open'] - current['low']
+        
+        if (body_size < total_range * 0.3 and 
+            lower_shadow > body_size * 2 and
+            current['close'] > previous['close']):
+            return True
+        
+        return False
+    
+    def detect_bullish_engulfing(self, df):
+        """Detectar patrón Engulfing Alcista"""
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        # Vela actual debe ser alcista y envolver a la anterior
+        if (current['close'] > current['open'] and
+            previous['close'] < previous['open'] and
+            current['open'] < previous['close'] and
+            current['close'] > previous['open']):
+            return True
+        
+        return False
+    
+    def detect_shooting_star(self, df):
+        """Detectar patrón Shooting Star"""
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        # Cuerpo pequeño en la parte inferior
+        body_size = abs(current['close'] - current['open'])
+        total_range = current['high'] - current['low']
+        
+        # Sombra superior al menos 2x el cuerpo
+        upper_shadow = current['high'] - current['close'] if current['close'] > current['open'] else current['high'] - current['open']
+        
+        if (body_size < total_range * 0.3 and 
+            upper_shadow > body_size * 2 and
+            current['close'] < previous['close']):
+            return True
+        
+        return False
+    
+    def detect_bearish_engulfing(self, df):
+        """Detectar patrón Engulfing Bajista"""
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        # Vela actual debe ser bajista y envolver a la anterior
+        if (current['close'] < current['open'] and
+            previous['close'] > previous['open'] and
+            current['open'] > previous['close'] and
+            current['close'] < previous['open']):
+            return True
+        
+        return False
+    
+    def generate_trading_signals(self, indicators, regime, candle_patterns):
+        """
+        Generar señales de trading con confirmación múltiple
+        """
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        signals = []
+        
+        # Señal de Trend Following (requiere 3 confirmaciones)
+        trend_signal = self.generate_trend_signal(latest, regime)
+        if trend_signal and self.confirm_trend_signal(latest, regime, candle_patterns):
+            signals.append(trend_signal)
+        
+        # Señal de Mean Reversion (requiere 3 confirmaciones)
+        mr_signal = self.generate_mean_reversion_signal(latest, regime)
+        if mr_signal and self.confirm_mean_reversion_signal(latest, regime, candle_patterns):
+            signals.append(mr_signal)
+        
+        # Señal de Momentum (requiere 2 confirmaciones)
+        momentum_signal = self.generate_momentum_signal(latest, regime)
+        if momentum_signal and self.confirm_momentum_signal(latest, regime, candle_patterns):
+            signals.append(momentum_signal)
+        
+        # Señal de Breakout (requiere 2 confirmaciones + volumen)
+        breakout_signal = self.generate_breakout_signal(latest, regime)
+        if breakout_signal and self.confirm_breakout_signal(latest, regime, candle_patterns):
+            signals.append(breakout_signal)
+        
+        return signals
+    
+    def confirm_trend_signal(self, latest, regime, candle_patterns):
+        """Confirmar señal de tendencia"""
+        if regime != 'trending':
+            return False
+        
+        # Confirmación con patrones de velas
+        if 'long' in self.generate_trend_signal(latest, regime).get('type', ''):
+            return candle_patterns.get('hammer', False) or candle_patterns.get('engulfing_bullish', False)
+        else:
+            return candle_patterns.get('shooting_star', False) or candle_patterns.get('engulfing_bearish', False)
+    
+    def confirm_mean_reversion_signal(self, latest, regime, candle_patterns):
+        """Confirmar señal de mean reversion"""
+        if regime != 'ranging':
+            return False
+        
+        # Confirmación con RSI extremo y patrones
+        rsi = latest.get('rsi', 50)
+        if rsi < 30:
+            return candle_patterns.get('hammer', False)
+        elif rsi > 70:
+            return candle_patterns.get('shooting_star', False)
+        
+        return False
+    
+    def confirm_momentum_signal(self, latest, regime, candle_patterns):
+        """Confirmar señal de momentum"""
+        # Confirmación con volumen y patrones
+        volume_ratio = latest.get('volume_ratio', 1.0)
+        if volume_ratio < 1.5:
+            return False
+        
+        # Confirmar con patrón engulfing
+        return candle_patterns.get('engulfing_bullish', False) or candle_patterns.get('engulfing_bearish', False)
+    
+    def confirm_breakout_signal(self, latest, regime, candle_patterns):
+        """Confirmar señal de breakout"""
+        # Confirmación con volumen fuerte
+        volume_ratio = latest.get('volume_ratio', 1.0)
+        if volume_ratio < 2.0:
+            return False
+        
+        # Confirmar con patrón de continuación
+        return True  # Simplificado para este ejemplo
+    
+    def calculate_signal_weight(self, signal, market_data, ml_prediction):
+        """
+        Calcular peso de la señal con múltiples factores
+        """
+        weight = 0.0
+        
+        # Peso base por tipo de señal
+        signal_weights = {
+            'trend_long': 0.25,
+            'trend_short': 0.25,
+            'mean_reversion_long': 0.20,
+            'mean_reversion_short': 0.20,
+            'momentum_long': 0.15,
+            'momentum_short': 0.15,
+            'breakout_long': 0.30,
+            'breakout_short': 0.30
+        }
+        
+        weight += signal_weights.get(signal['type'], 0.10)
+        
+        # Ajuste por fuerza de indicadores
+        weight += self.calculate_indicator_strength(signal, market_data) * 0.20
+        
+        # Ajuste por predicción de ML
+        if ml_prediction:
+            ml_weight = ml_prediction.get('confidence', 0.5) * 0.30
+            weight += ml_weight
+        
+        # Ajuste por volumen
+        volume_weight = min(market_data.get('volume_ratio', 1.0) / 2.0, 0.15)
+        weight += volume_weight
+        
+        # Ajuste por régimen de mercado
+        regime_weights = {
+            'trending': 0.10,
+            'ranging': 0.05,
+            'breakout': 0.15,
+            'high_volatility': -0.20,
+            'transition': -0.10
+        }
+        weight += regime_weights.get(signal.get('market_regime'), 0)
+        
+        return max(0, min(weight, 1.0))
+    
+    def calculate_indicator_strength(self, signal, market_data):
+        """Calcular fuerza de los indicadores"""
+        strength = 0.0
+        
+        # RSI strength
+        rsi = market_data.get('rsi', 50)
+        if 'long' in signal['type']:
+            if 40 < rsi < 70:
+                strength += 0.3
+        else:
+            if 30 < rsi < 60:
+                strength += 0.3
+        
+        # MACD strength
+        macd_hist = market_data.get('macd_histogram', 0)
+        if ('long' in signal['type'] and macd_hist > 0) or ('short' in signal['type'] and macd_hist < 0):
+            strength += 0.3
+        
+        # ADX strength
+        adx = market_data.get('adx', 0)
+        if adx > 25:
+            strength += 0.2
+        
+        return min(strength, 1.0)
+    
+    def confirm_volume_signal(self, signal, market_data):
+        """Confirmar señal con análisis de volumen"""
+        volume_ratio = market_data.get('volume_ratio', 1.0)
+        
+        # Requisitos mínimos de volumen según tipo de señal
+        volume_requirements = {
+            'trend_long': 1.2,
+            'trend_short': 1.2,
+            'mean_reversion_long': 0.8,
+            'mean_reversion_short': 0.8,
+            'momentum_long': 1.5,
+            'momentum_short': 1.5,
+            'breakout_long': 2.0,
+            'breakout_short': 2.0
+        }
+        
+        required_volume = volume_requirements.get(signal['type'], 1.0)
+        
+        return volume_ratio >= required_volume
+    
+    def analyze_btc_correlation(self, symbol_data, btc_data):
+        """Analizar correlación con Bitcoin"""
+        if len(symbol_data) < 20 or len(btc_data) < 20:
+            return 0
+        
+        # Calcular retornos
+        symbol_returns = symbol_data['close'].pct_change().dropna()
+        btc_returns = btc_data['close'].pct_change().dropna()
+        
+        # Alinear fechas
+        aligned_data = pd.concat([symbol_returns, btc_returns], axis=1).dropna()
+        
+        if len(aligned_data) < 10:
+            return 0
+        
+        # Calcular correlación
+        correlation = aligned_data.iloc[:, 0].corr(aligned_data.iloc[:, 1])
+        
+        return correlation
+    
+    # Métodos originales (sin cambios para mantener el código manejable)
+    def calculate_indicators(self, df):
+        """Calcular indicadores técnicos clave"""
+        indicators = {}
+        
+        # Price action
+        indicators['close'] = df['close']
+        indicators['volume'] = df['volume']
+        indicators['returns'] = df['close'].pct_change()
+        
+        # Moving averages
+        indicators['sma_20'] = df['close'].rolling(window=20).mean()
+        indicators['sma_50'] = df['close'].rolling(window=50).mean()
+        indicators['ema_12'] = df['close'].ewm(span=12).mean()
+        indicators['ema_26'] = df['close'].ewm(span=26).mean()
+        
+        # Momentum indicators
+        indicators['rsi'] = self.calculate_rsi(df['close'])
+        indicators['macd'], indicators['macd_signal'], indicators['macd_histogram'] = self.calculate_macd(df['close'])
+        indicators['stoch_k'], indicators['stoch_d'] = self.calculate_stochastic(df)
+        
+        # Volatility indicators
+        indicators['atr'] = self.calculate_atr(df)
+        indicators['bb_upper'], indicators['bb_middle'], indicators['bb_lower'] = self.calculate_bollinger_bands(df)
+        
+        # Volume indicators
+        indicators['volume_sma'] = df['volume'].rolling(window=20).mean()
+        indicators['volume_ratio'] = df['volume'] / indicators['volume_sma']
+        
+        # Trend indicators
+        indicators['adx'] = self.calculate_adx(df)
+        indicators['cci'] = self.calculate_cci(df)
+        
+        return indicators
+    
+    def calculate_rsi(self, prices, period=14):
+        """Calcular RSI"""
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    
+    def calculate_macd(self, prices, fast=12, slow=26, signal=9):
+        """Calcular MACD"""
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=signal).mean()
+        macd_histogram = macd - macd_signal
+        return macd, macd_signal, macd_histogram
+    
+    def calculate_stochastic(self, df, k_period=14, d_period=3):
+        """Calcular Stochastic Oscillator"""
+        low_min = df['low'].rolling(window=k_period).min()
+        high_max = df['high'].rolling(window=k_period).max()
+        k_percent = 100 * ((df['close'] - low_min) / (high_max - low_min))
+        d_percent = k_percent.rolling(window=d_period).mean()
+        return k_percent, d_percent
+    
+    def calculate_atr(self, df, period=14):
+        """Calcular Average True Range"""
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        return true_range.rolling(window=period).mean()
+    
+    def calculate_bollinger_bands(self, df, period=20, std_dev=2):
+        """Calcular Bollinger Bands"""
+        sma = df['close'].rolling(window=period).mean()
+        std = df['close'].rolling(window=period).std()
+        upper_band = sma + (std * std_dev)
+        lower_band = sma - (std * std_dev)
+        return upper_band, sma, lower_band
+    
+    def calculate_adx(self, df, period=14):
+        """Calcular Average Directional Index"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        up_move = high - high.shift(1)
+        down_move = low.shift(1) - low
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        
+        tr = self.calculate_atr(df, period)
+        plus_di = 100 * (pd.Series(plus_dm).rolling(window=period).mean() / tr)
+        minus_di = 100 * (pd.Series(minus_dm).rolling(window=period).mean() / tr)
+        
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        return adx
+    
+    def calculate_cci(self, df, period=20):
+        """Calcular Commodity Channel Index"""
+        tp = (df['high'] + df['low'] + df['close']) / 3
+        sma = tp.rolling(window=period).mean()
+        mad = tp.rolling(window=period).apply(lambda x: np.fabs(x - x.mean()).mean())
+        cci = (tp - sma) / (0.015 * mad)
+        return cci
+    
+    def detect_market_regime(self, indicators):
+        """Detectar régimen de mercado"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        # Volatilidad
+        atr = latest['atr']
+        close = latest['close']
+        volatility = atr / close if close > 0 else 0
+        
+        # Trend strength
+        adx = latest['adx']
+        sma_trend = latest['sma_20'] - latest['sma_50']
+        
+        # Rango vs Tendencia
+        bb_position = (latest['close'] - latest['bb_lower']) / (latest['bb_upper'] - latest['bb_lower'])
+        
+        # Clasificación de régimen
+        if volatility > 0.03:
+            return 'high_volatility'
+        elif adx > 25 and abs(sma_trend) > close * 0.02:
+            return 'trending'
+        elif bb_position > 0.3 and bb_position < 0.7:
+            return 'ranging'
+        else:
+            return 'transition'
+    
+    def generate_trend_signal(self, latest, regime):
+        """Generar señal de trend following"""
+        if regime != 'trending':
+            return None
+        
+        # Condiciones para tendencia alcista
+        if (latest['sma_20'] > latest['sma_50'] and
+            latest['macd'] > latest['macd_signal'] and
+            latest['rsi'] > 50 and latest['rsi'] < 70 and
+            latest['adx'] > 25):
+            
+            return {
+                'type': 'trend_long',
+                'strength': min(latest['adx'] / 50, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'trend_long')
+            }
+        
+        # Condiciones para tendencia bajista
+        elif (latest['sma_20'] < latest['sma_50'] and
+              latest['macd'] < latest['macd_signal'] and
+              latest['rsi'] < 50 and latest['rsi'] > 30 and
+              latest['adx'] > 25):
+            
+            return {
+                'type': 'trend_short',
+                'strength': min(latest['adx'] / 50, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'trend_short')
+            }
+        
+        return None
+    
+    def generate_mean_reversion_signal(self, latest, regime):
+        """Generar señal de mean reversion"""
+        if regime != 'ranging':
+            return None
+        
+        # Condiciones para reversión alcista (sobreventa)
+        if (latest['close'] < latest['bb_lower'] and
+            latest['rsi'] < 30 and
+            latest['stoch_k'] < 20 and
+            latest['cci'] < -200):
+            
+            return {
+                'type': 'mean_reversion_long',
+                'strength': min(abs(latest['cci']) / 300, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'mean_reversion_long')
+            }
+        
+        # Condiciones para reversión bajista (sobrecompra)
+        elif (latest['close'] > latest['bb_upper'] and
+              latest['rsi'] > 70 and
+              latest['stoch_k'] > 80 and
+              latest['cci'] > 200):
+            
+            return {
+                'type': 'mean_reversion_short',
+                'strength': min(latest['cci'] / 300, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'mean_reversion_short')
+            }
+        
+        return None
+    
+    def generate_momentum_signal(self, latest, regime):
+        """Generar señal de momentum"""
+        # Momentum alcista
+        if (latest['macd_histogram'] > 0 and
+            latest['rsi'] > 60 and
+            latest['volume_ratio'] > 1.2 and
+            latest['close'] > latest['sma_20']):
+            
+            return {
+                'type': 'momentum_long',
+                'strength': min(latest['rsi'] / 100, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'momentum_long')
+            }
+        
+        # Momentum bajista
+        elif (latest['macd_histogram'] < 0 and
+              latest['rsi'] < 40 and
+              latest['volume_ratio'] > 1.2 and
+              latest['close'] < latest['sma_20']):
+            
+            return {
+                'type': 'momentum_short',
+                'strength': min((100 - latest['rsi']) / 100, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'momentum_short')
+            }
+        
+        return None
+    
+    def generate_breakout_signal(self, latest, regime):
+        """Generar señal de breakout"""
+        # Breakout alcista
+        if (latest['close'] > latest['bb_upper'] and
+            latest['volume_ratio'] > 1.5 and
+            latest['adx'] > 20):
+            
+            return {
+                'type': 'breakout_long',
+                'strength': min(latest['volume_ratio'] / 2, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'breakout_long')
+            }
+        
+        # Breakout bajista
+        elif (latest['close'] < latest['bb_lower'] and
+              latest['volume_ratio'] > 1.5 and
+              latest['adx'] > 20):
+            
+            return {
+                'type': 'breakout_short',
+                'strength': min(latest['volume_ratio'] / 2, 1.0),
+                'confidence': self.calculate_signal_confidence(latest, 'breakout_short')
+            }
+        
+        return None
+    
+    def calculate_signal_confidence(self, latest, signal_type):
+        """Calcular confianza de la señal"""
+        confidence_factors = []
+        
+        # Factor RSI
+        if 'long' in signal_type:
+            confidence_factors.append(min(latest['rsi'] / 100, 1.0))
+        else:
+            confidence_factors.append(min((100 - latest['rsi']) / 100, 1.0))
+        
+        # Factor MACD
+        if 'long' in signal_type:
+            confidence_factors.append(min(max(latest['macd_histogram'], 0) / 0.01, 1.0))
+        else:
+            confidence_factors.append(min(max(-latest['macd_histogram'], 0) / 0.01, 1.0))
+        
+        # Factor Volumen
+        confidence_factors.append(min(latest['volume_ratio'] / 2, 1.0))
+        
+        # Factor ADX (fuerza de tendencia)
+        confidence_factors.append(min(latest['adx'] / 50, 1.0))
+        
+        # Promedio ponderado
+        return np.mean(confidence_factors)
+    
+    def assess_market_state(self, indicators, regime):
+        """Evaluar estado general del mercado"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        return {
+            'volatility': latest['atr'] / latest['close'],
+            'trend_strength': latest['adx'] / 100,
+            'momentum': latest['rsi'] / 100,
+            'volume_activity': latest['volume_ratio'],
+            'regime': regime,
+            'favorable_for_trading': self.is_favorable_for_trading(regime, latest)
+        }
+    
+    def is_favorable_for_trading(self, regime, latest):
+        """Determinar si es favorable para operar"""
+        if regime == 'high_volatility':
+            return False
+        elif regime == 'transition':
+            return False
+        elif latest['volume_ratio'] < 0.8:
+            return False
+        elif latest['adx'] < 15:
+            return False
+        
+        return True
+
+
+class EnsembleMLPredictor:
+    """Modelo de ensemble para Machine Learning"""
+    def __init__(self):
+        self.models = {
+            'rf': RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1),
+            'gb': GradientBoostingClassifier(n_estimators=100, max_depth=6, random_state=42)
+        }
+        self.weights = {'rf': 0.5, 'gb': 0.5}
+        self.scalers = {}
+        self.is_trained = False
+    
+    def train_models(self, historical_data):
+        """Entrenar modelos de ensemble"""
+        print("Entrenando modelos de ensemble...")
+        
+        # Preparar datos
+        features, targets = self.prepare_training_data(historical_data)
+        
+        # Entrenar cada modelo
+        for model_name, model in self.models.items():
+            X_train, X_test, y_train, y_test = train_test_split(
+                features, targets['direction'], test_size=0.2, random_state=42
+            )
+            
+            # Escalar características
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+            
+            # Entrenar modelo
+            model.fit(X_train_scaled, y_train)
+            
+            # Guardar scaler
+            self.scalers[model_name] = scaler
+            
+            # Evaluar
+            accuracy = model.score(X_test_scaled, y_test)
+            print(f"Modelo {model_name} - Accuracy: {accuracy:.3f}")
+        
+        self.is_trained = True
+        print("Modelos de ensemble entrenados exitosamente")
+    
+    def prepare_training_data(self, historical_data):
+        """Preparar datos para entrenamiento"""
+        features_list = []
+        targets = {'direction': []}
+        
+        for symbol_data in historical_data:
+            if len(symbol_data) < 50:
+                continue
+                
+            # Calcular características
+            features = self.extract_features(symbol_data)
+            
+            # Calcular targets (futuros retornos)
+            future_returns = symbol_data['close'].pct_change().shift(-5).dropna()
+            
+            for i in range(len(features) - 5):
+                if i + 5 < len(future_returns):
+                    features_list.append(features[i])
+                    
+                    # Target: dirección (1=alcista, 0=bajista)
+                    direction = 1 if future_returns.iloc[i] > 0 else 0
+                    targets['direction'].append(direction)
+        
+        return np.array(features_list), targets
+    
+    def extract_features(self, data):
+        """Extraer características de los datos"""
+        features = []
+        
+        # Características de precio
+        features.append(data['close'].pct_change().iloc[-1])
+        features.append(data['close'].rolling(5).mean().iloc[-1] / data['close'].iloc[-1] - 1)
+        
+        # Características de volatilidad
+        returns = data['close'].pct_change().dropna()
+        features.append(returns.std() * np.sqrt(252))
+        
+        # Características de volumen
+        volume_ratio = data['volume'].iloc[-1] / data['volume'].rolling(20).mean().iloc[-1]
+        features.append(volume_ratio)
+        
+        # Características técnicas
+        if len(data) >= 14:
+            # RSI
+            delta = data['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs.iloc[-1]))
+            features.append(rsi / 100)
+            
+            # MACD
+            ema_12 = data['close'].ewm(span=12).mean()
+            ema_26 = data['close'].ewm(span=26).mean()
+            macd = ema_12 - ema_26
+            features.append(macd.iloc[-1] / data['close'].iloc[-1])
+        
+        return features
+    
+    def predict_ensemble(self, market_data):
+        """Predicción usando ensemble de modelos"""
+        if not self.is_trained:
+            return None
+        
+        # Extraer características
+        features = self.extract_features(market_data)
+        
+        # Realizar predicciones de cada modelo
+        predictions = {}
+        
+        for model_name, model in self.models.items():
+            if model_name in self.scalers:
+                features_scaled = self.scalers[model_name].transform([features])
+                pred = model.predict_proba(features_scaled)[0]
+                predictions[model_name] = pred
+        
+        # Combinar predicciones con pesos
+        weighted_pred = np.zeros(2)
+        for model_name, pred in predictions.items():
+            weighted_pred += pred * self.weights[model_name]
+        
+        # Calcular métricas finales
+        direction = 1 if weighted_pred[1] > 0.6 else 0
+        confidence = max(weighted_pred)
+        signal_strength = confidence
+        
+        return {
+            'direction': direction,
+            'confidence': confidence,
+            'signal_strength': signal_strength,
+            'recommended_action': self.generate_recommendation(direction, signal_strength)
+        }
+    
+    def generate_recommendation(self, direction, signal_strength):
+        """Generar recomendación de trading"""
+        if signal_strength < 0.6:
+            return 'hold'
+        
+        if direction == 1:
+            if signal_strength > 0.8:
+                return 'strong_buy'
+            else:
+                return 'buy'
+        else:
+            if signal_strength > 0.8:
+                return 'strong_sell'
+            else:
+                return 'sell'
+
+
+class AdaptiveLearningSystem:
+    """Sistema de aprendizaje adaptativo"""
+    def __init__(self):
+        self.performance_history = []
+        self.signal_performance = {}
+        self.market_conditions = []
+        self.confidence_thresholds = {
+            'trend_long': 0.70,
+            'trend_short': 0.70,
+            'mean_reversion_long': 0.65,
+            'mean_reversion_short': 0.65,
+            'momentum_long': 0.75,
+            'momentum_short': 0.75,
+            'breakout_long': 0.80,
+            'breakout_short': 0.80
+        }
+    
+    def update_performance(self, trade_result):
+        """Actualizar rendimiento del sistema"""
+        self.performance_history.append(trade_result)
+        
+        # Actualizar rendimiento por tipo de señal
+        signal_type = trade_result.get('signal_type')
+        if signal_type not in self.signal_performance:
+            self.signal_performance[signal_type] = {'wins': 0, 'losses': 0, 'total_pnl': 0}
+        
+        if trade_result['pnl'] > 0:
+            self.signal_performance[signal_type]['wins'] += 1
+        else:
+            self.signal_performance[signal_type]['losses'] += 1
+        
+        self.signal_performance[signal_type]['total_pnl'] += trade_result['pnl']
+        
+        # Ajustar umbrales periódicamente
+        if len(self.performance_history) % 20 == 0:
+            self.adjust_confidence_thresholds()
+    
+    def adjust_confidence_thresholds(self):
+        """Ajustar umbrales de confianza basado en rendimiento"""
+        for signal_type, stats in self.signal_performance.items():
+            total = stats['wins'] + stats['losses']
+            if total > 10:  # Muestras suficientes
+                win_rate = stats['wins'] / total
+                avg_pnl = stats['total_pnl'] / total
+                
+                # Ajustar umbral de confianza
+                if win_rate > 0.7 and avg_pnl > 0.02:
+                    # Reducir umbral si funciona bien
+                    self.confidence_thresholds[signal_type] = max(0.60, self.confidence_thresholds[signal_type] - 0.02)
+                elif win_rate < 0.5 or avg_pnl < 0:
+                    # Aumentar umbral si funciona mal
+                    self.confidence_thresholds[signal_type] = min(0.85, self.confidence_thresholds[signal_type] + 0.02)
+                
+                print(f"Umbral ajustado para {signal_type}: {self.confidence_thresholds[signal_type]:.2f}")
+    
+    def get_confidence_threshold(self, signal_type):
+        """Obtener umbral de confianza para un tipo de señal"""
+        return self.confidence_thresholds.get(signal_type, 0.70)
+
+
+# ==================== CLASES ORIGINALES (SIN CAMBIOS) ====================
+
+class SmartRiskManager:
+    def __init__(self):
+        self.max_portfolio_risk = 0.02
+        self.max_daily_loss = 0.05
+        self.max_drawdown = 0.15
+        
+        self.daily_pnl = 0
+        self.peak_capital = None
+        self.positions = {}
+    
+    def calculate_position_size(self, signal, current_capital, market_data):
+        base_risk = current_capital * self.max_portfolio_risk
+        
+        signal_strength = signal.get('strength', 0.5)
+        risk_adjustment = 0.5 + (signal_strength * 0.5)
+        
+        confidence = signal.get('confidence', 0.5)
+        confidence_adjustment = 0.5 + (confidence * 0.5)
+        
+        adjusted_risk = base_risk * risk_adjustment * confidence_adjustment
+        
+        atr = market_data.get('atr', 0)
+        stop_distance = atr * 1.5
+        
+        if stop_distance > 0:
+            position_size = adjusted_risk / stop_distance
+        else:
+            position_size = adjusted_risk / 0.02
+        
+        max_position = current_capital * 0.05
+        position_size = min(position_size, max_position)
+        
+        return position_size
+    
+    def calculate_stop_loss(self, entry_price, signal_type, market_data):
+        atr = market_data.get('atr', entry_price * 0.02)
+        
+        if 'long' in signal_type:
+            if signal_type == 'trend_long':
+                stop_distance = atr * 2.0
+            elif signal_type == 'mean_reversion_long':
+                stop_distance = atr * 1.0
+            else:
+                stop_distance = atr * 1.5
+            
+            stop_loss = entry_price - stop_distance
+        else:
+            if signal_type == 'trend_short':
+                stop_distance = atr * 2.0
+            elif signal_type == 'mean_reversion_short':
+                stop_distance = atr * 1.0
+            else:
+                stop_distance = atr * 1.5
+            
+            stop_loss = entry_price + stop_distance
+        
+        return stop_loss
+    
+    def calculate_take_profit(self, entry_price, stop_loss, signal_type):
+        risk_distance = abs(entry_price - stop_loss)
+        
+        if 'trend' in signal_type:
+            rr_ratio = 2.5
+        elif 'mean_reversion' in signal_type:
+            rr_ratio = 1.8
+        elif 'momentum' in signal_type:
+            rr_ratio = 2.0
+        elif 'breakout' in signal_type:
+            rr_ratio = 3.0
+        else:
+            rr_ratio = 2.0
+        
+        profit_distance = risk_distance * rr_ratio
+        
+        if 'long' in signal_type:
+            take_profit = entry_price + profit_distance
+        else:
+            take_profit = entry_price - profit_distance
+        
+        return take_profit
+    
+    def check_risk_limits(self, current_capital, new_position_risk):
+        if self.daily_pnl < -self.max_daily_loss * current_capital:
+            return False, "Límite de pérdida diaria alcanzado"
+        
+        if self.peak_capital is None:
+            self.peak_capital = current_capital
+        
+        current_drawdown = (self.peak_capital - current_capital) / self.peak_capital
+        
+        if current_drawdown > self.max_drawdown:
+            return False, f"Límite de drawdown alcanzado: {current_drawdown:.1%}"
+        
+        total_risk = sum(pos.get('risk', 0) for pos in self.positions.values())
+        
+        if total_risk + new_position_risk > current_capital * 0.10:
+            return False, "Límite de riesgo total alcanzado"
+        
+        return True, "Dentro de límites de riesgo"
+    
+    def update_position(self, position_id, current_price, current_time):
+        if position_id not in self.positions:
+            return
+        
+        position = self.positions[position_id]
+        
+        if position['type'] == 'long':
+            pnl = (current_price - position['entry_price']) * position['size']
+        else:
+            pnl = (position['entry_price'] - current_price) * position['size']
+        
+        position['current_price'] = current_price
+        position['current_pnl'] = pnl
+        position['last_update'] = current_time
+        
+        self.daily_pnl += pnl - position.get('previous_pnl', 0)
+        position['previous_pnl'] = pnl
+        
+        total_capital = self.get_total_capital()
+        if total_capital > self.peak_capital:
+            self.peak_capital = total_capital
+    
+    def get_total_capital(self):
+        total_capital = sum(pos.get('current_pnl', 0) for pos in self.positions.values())
+        return total_capital
+    
+    def should_close_position(self, position_id, current_price, market_data):
+        if position_id not in self.positions:
+            return False, "Posición no encontrada"
+        
+        position = self.positions[position_id]
+        
+        if position['type'] == 'long' and current_price <= position['stop_loss']:
+            return True, "Stop loss alcanzado"
+        elif position['type'] == 'short' and current_price >= position['stop_loss']:
+            return True, "Stop loss alcanzado"
+        
+        if position['type'] == 'long' and current_price >= position['take_profit']:
+            return True, "Take profit alcanzado"
+        elif position['type'] == 'short' and current_price <= position['take_profit']:
+            return True, "Take profit alcanzado"
+        
+        if 'trailing_stop' in position:
+            if position['type'] == 'long' and current_price <= position['trailing_stop']:
+                return True, "Trailing stop alcanzado"
+            elif position['type'] == 'short' and current_price >= position['trailing_stop']:
+                return True, "Trailing stop alcanzado"
+        
+        return False, "Mantener posición"
+
+
+class PortfolioOptimizer:
+    def __init__(self):
+        self.max_positions = 5
+        self.max_correlation = 0.7
+        
+    def optimize_allocation(self, signals, current_portfolio, risk_manager):
+        high_confidence_signals = [
+            s for s in signals if s.get('confidence', 0) > 0.6
+        ]
+        
+        if not high_confidence_signals:
+            return []
+        
+        sorted_signals = sorted(
+            high_confidence_signals,
+            key=lambda x: x.get('strength', 0) * x.get('confidence', 0),
+            reverse=True
+        )
+        
+        selected_signals = sorted_signals[:self.max_positions]
+        
+        allocations = []
+        total_weight = 0
+        
+        for signal in selected_signals:
+            weight = (signal.get('strength', 0.5) * signal.get('confidence', 0.5)) / 2
+            
+            if self.check_diversification(signal, allocations):
+                allocations.append({
+                    'signal': signal,
+                    'weight': weight,
+                    'priority': len(allocations) + 1
+                })
+                total_weight += weight
+        
+        if total_weight > 0:
+            for allocation in allocations:
+                allocation['weight'] = allocation['weight'] / total_weight
+        
+        return allocations
+    
+    def check_diversification(self, new_signal, existing_allocations):
+        if not existing_allocations:
+            return True
+        
+        for allocation in existing_allocations:
+            existing_signal = allocation['signal']
+            
+            if existing_signal.get('symbol') == new_signal.get('symbol'):
+                return False
+            
+            if (existing_signal.get('type') == new_signal.get('type') and
+                self.calculate_signal_correlation(existing_signal, new_signal) > self.max_correlation):
+                return False
+        
+        return True
+    
+    def calculate_signal_correlation(self, signal1, signal2):
+        correlation = 0.0
+        
+        if signal1.get('type') == signal2.get('type'):
+            correlation += 0.5
+        
+        if ('long' in signal1.get('type', '') and 'long' in signal2.get('type', '')) or \
+           ('short' in signal1.get('type', '') and 'short' in signal2.get('type', '')):
+            correlation += 0.3
+        
+        return min(correlation, 1.0)
+
+
+class ExecutionEngine:
+    def __init__(self):
+        self.exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        
+        self.orders = {}
+        self.fills = []
+        
+    def execute_order(self, order_params):
+        try:
+            symbol = order_params['symbol']
+            side = order_params['side']
+            order_type = order_params.get('type', 'market')
+            amount = order_params['amount']
+            
+            if order_type == 'market':
+                order = self.exchange.create_market_buy_order(
+                    symbol, amount
+                ) if side == 'buy' else self.exchange.create_market_sell_order(
+                    symbol, amount
+                )
+            else:
+                price = order_params.get('price')
+                order = self.exchange.create_limit_buy_order(
+                    symbol, amount, price
+                ) if side == 'buy' else self.exchange.create_limit_sell_order(
+                    symbol, amount, price
+                )
+            
+            order_id = order['id']
+            self.orders[order_id] = {
+                'order': order,
+                'params': order_params,
+                'status': 'open',
+                'created_at': datetime.now()
+            }
+            
+            print(f"Orden ejecutada: {side} {amount} {symbol} @ {order.get('price', 'market')}")
+            
+            return {
+                'success': True,
+                'order_id': order_id,
+                'order': order
+            }
+            
+        except Exception as e:
+            print(f"Error ejecutando orden: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def set_stop_loss(self, symbol, position_size, stop_price):
+        try:
+            stop_order = self.exchange.create_order(
+                symbol=symbol,
+                type='stop_market',
+                side='sell',
+                amount=position_size,
+                params={'stopPrice': stop_price}
+            )
+            
+            print(f"Stop loss colocado: {symbol} @ {stop_price}")
+            
+            return {
+                'success': True,
+                'order_id': stop_order['id']
+            }
+            
+        except Exception as e:
+            print(f"Error colocando stop loss: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def set_take_profit(self, symbol, position_size, take_profit_price):
+        try:
+            tp_order = self.exchange.create_limit_sell_order(
+                symbol=symbol,
+                amount=position_size,
+                price=take_profit_price
+            )
+            
+            print(f"Take profit colocado: {symbol} @ {take_profit_price}")
+            
+            return {
+                'success': True,
+                'order_id': tp_order['id']
+            }
+            
+        except Exception as e:
+            print(f"Error colocando take profit: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def check_order_status(self, order_id):
+        try:
+            order_status = self.exchange.fetch_order(order_id)
+            return order_status['status']
+        except Exception as e:
+            print(f"Error verificando estado de orden: {e}")
+            return 'unknown'
+    
+    def get_account_balance(self):
+        try:
+            balance = self.exchange.fetch_balance()
+            return balance
+        except Exception as e:
+            print(f"Error obteniendo balance: {e}")
+            return None
+
+
+# ==================== CLASE PRINCIPAL MEJORADA ====================
+
+class EnhancedQuantumAlphaDesktop:
+    def __init__(self, initial_capital=10000):
+        self.initial_capital = initial_capital
+        self.current_capital = initial_capital
+        
+        # Componentes mejorados
+        self.market_analyzer = EnhancedMarketAnalyzer()
+        self.ml_predictor = EnsembleMLPredictor()
+        self.risk_manager = SmartRiskManager()
+        self.portfolio_optimizer = PortfolioOptimizer()
+        self.execution_engine = ExecutionEngine()
+        self.adaptive_system = AdaptiveLearningSystem()
+        
+        # Estado del sistema
+        self.positions = {}
+        self.performance_history = []
+        self.market_data_cache = {}
+        self.is_running = False
+        
+        # Configuración de exchanges
+        self.exchanges = {
+            'binance': ccxt.binance({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'future'}
+            }),
+            'coinbase': ccxt.coinbase({
+                'enableRateLimit': True
+            })
+        }
+        
+        # Símbolos a monitorear
+        self.watchlist = [
+            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'ADA/USDT',
+            'DOT/USDT', 'MATIC/USDT', 'AVAX/USDT', 'LINK/USDT', 'UNI/USDT'
+        ]
+        
+        # Configuración de trading mejorada
+        self.timeframe = '1h'
+        self.leverage = 2.0
+        self.min_signal_confidence = 0.70  # Aumentado de 0.65
+        self.max_positions = 5
+        self.require_multi_timeframe = True
+        self.require_volume_confirmation = True
+        self.min_btc_correlation = 0.3
+        
+        # Métricas de rendimiento
+        self.daily_pnl = 0
+        self.peak_capital = initial_capital
+        self.max_drawdown = 0
+        self.win_rate = 0
+        self.profit_factor = 0
+        
+        print("Enhanced Quantum Alpha Desktop inicializado")
+        print(f"Capital inicial: ${initial_capital:,.2f}")
+    
+    async def initialize(self):
+        """Inicializar componentes del sistema"""
+        print("Inicializando componentes de Enhanced Quantum Alpha Desktop...")
+        
+        # Obtener datos históricos para entrenamiento
+        print("Obteniendo datos históricos para entrenamiento...")
+        historical_data = await self.fetch_historical_data()
+        
+        # Entrenar modelos de ML
+        if historical_data:
+            self.ml_predictor.train_models(historical_data)
+        else:
+            print("No se pudieron obtener datos históricos. Usando modelos pre-entrenados.")
+        
+        # Actualizar balance de cuenta
+        balance = self.execution_engine.get_account_balance()
+        if balance:
+            print(f"Balance actual: ${balance['USDT']['total']:,.2f}")
+        
+        print("Inicialización completada")
+    
+    async def fetch_historical_data(self, days=60):
+        """Obtener datos históricos para entrenamiento"""
+        historical_data = []
+        
+        try:
+            for symbol in self.watchlist:
+                print(f"Obteniendo datos históricos para {symbol}...")
+                
+                ohlcv = self.exchanges['binance'].fetch_ohlcv(
+                    symbol, self.timeframe, limit=days*24
+                )
+                
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                historical_data.append(df)
+                
+                await asyncio.sleep(0.5)
+            
+            return historical_data
+            
+        except Exception as e:
+            print(f"Error obteniendo datos históricos: {e}")
+            return []
+    
+    async def get_btc_data(self):
+        """Obtener datos de Bitcoin para análisis de correlación"""
+        try:
+            ohlcv = self.exchanges['binance'].fetch_ohlcv(
+                'BTC/USDT', self.timeframe, limit=100
+            )
+            
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de Bitcoin: {e}")
+            return None
+    
+    async def analyze_all_symbols(self):
+        """Análisis mejorado con múltiples confirmaciones"""
+        market_analysis = {}
+        
+        # Obtener datos de Bitcoin para correlación
+        btc_data = await self.get_btc_data()
+        
+        for symbol in self.watchlist:
+            try:
+                # Análisis multi-timeframe
+                if self.require_multi_timeframe:
+                    analysis = self.market_analyzer.analyze_multiple_timeframes(symbol)
+                else:
+                    analysis = self.market_analyzer.analyze_market_state(symbol, self.timeframe)
+                
+                if analysis:
+                    # Análisis de correlación con Bitcoin
+                    if symbol in self.market_data_cache and btc_data is not None:
+                        correlation = self.market_analyzer.analyze_btc_correlation(
+                            self.market_data_cache[symbol], btc_data
+                        )
+                        
+                        # Filtrar por correlación
+                        if abs(correlation) < self.min_btc_correlation:
+                            print(f"Señal descartada para {symbol}: correlación con BTC muy baja ({correlation:.2f})")
+                            continue
+                    
+                    # Obtener predicciones de ML ensemble
+                    if symbol in self.market_data_cache:
+                        ml_prediction = self.ml_predictor.predict_ensemble(
+                            self.market_data_cache[symbol]
+                        )
+                        if ml_prediction:
+                            analysis['ml_prediction'] = ml_prediction
+                    
+                    market_analysis[symbol] = analysis
+                
+                await asyncio.sleep(0.2)
+                
+            except Exception as e:
+                print(f"Error analizando {symbol}: {e}")
+        
+        return market_analysis
+    
+    def generate_trading_signals(self, market_analysis):
+        """Generar señales con confirmaciones múltiples"""
+        trading_signals = []
+        
+        for symbol, analysis in market_analysis.items():
+            # Verificar condiciones favorables
+            if not analysis.get('market_state', {}).get('favorable_for_trading', False):
+                continue
+            
+            # Obtener señales técnicas
+            technical_signals = analysis.get('signals', [])
+            
+            # Filtrar por volumen
+            if self.require_volume_confirmation:
+                volume_confirmed = []
+                for signal in technical_signals:
+                    if self.market_analyzer.confirm_volume_signal(signal, analysis.get('indicators', {})):
+                        volume_confirmed.append(signal)
+                technical_signals = volume_confirmed
+            
+            # Procesar cada señal
+            for signal in technical_signals:
+                # Calcular peso de la señal
+                signal_weight = self.market_analyzer.calculate_signal_weight(
+                    signal, 
+                    analysis.get('indicators', {}),
+                    analysis.get('ml_prediction')
+                )
+                
+                # Obtener umbral adaptativo
+                adaptive_threshold = self.adaptive_system.get_confidence_threshold(signal['type'])
+                
+                # Filtrar por peso mínimo
+                if signal_weight >= adaptive_threshold:
+                    enhanced_signal = {
+                        'symbol': symbol,
+                        'type': signal['type'],
+                        'strength': signal['strength'],
+                        'confidence': signal_weight,
+                        'timestamp': datetime.now(),
+                        'market_regime': analysis.get('regime'),
+                        'market_state': analysis.get('market_state'),
+                        'weight': signal_weight
+                    }
+                    
+                    trading_signals.append(enhanced_signal)
+        
+        return trading_signals
+    
+    async def run_trading_cycle(self):
+        """Ejecutar un ciclo completo de trading"""
+        print("Iniciando ciclo de trading mejorado...")
+        
+        # 1. Analizar mercado para todos los símbolos
+        market_analysis = await self.analyze_all_symbols()
+        
+        # 2. Generar señales de trading
+        trading_signals = self.generate_trading_signals(market_analysis)
+        
+        # 3. Optimizar portafolio
+        portfolio_allocations = self.portfolio_optimizer.optimize_allocation(
+            trading_signals, self.positions, self.risk_manager
+        )
+        
+        # 4. Ejecutar operaciones
+        await self.execute_trades(portfolio_allocations)
+        
+        # 5. Monitorear posiciones existentes
+        await self.monitor_positions()
+        
+        # 6. Actualizar rendimiento
+        self.update_performance()
+        
+        print("Ciclo de trading mejorado completado")
+    
+    async def execute_trades(self, portfolio_allocations):
+        """Ejecutar operaciones basadas en la asignación de portafolio"""
+        for allocation in portfolio_allocations:
+            signal = allocation['signal']
+            weight = allocation['weight']
+            
+            symbol = signal['symbol']
+            signal_type = signal['type']
+            
+            # Verificar si ya tenemos una posición para este símbolo
+            existing_position = next((p for p in self.positions.values() if p['symbol'] == symbol), None)
+            
+            if existing_position:
+                # Actualizar posición existente
+                await self.update_position(existing_position, signal)
+            else:
+                # Abrir nueva posición
+                await self.open_position(signal, weight)
+    
+    async def open_position(self, signal, weight):
+        """Abrir una nueva posición"""
+        symbol = signal['symbol']
+        signal_type = signal['type']
+        
+        try:
+            # Obtener precio actual
+            ticker = self.exchanges['binance'].fetch_ticker(symbol)
+            current_price = ticker['last']
+            
+            # Obtener datos de mercado para cálculo de riesgo
+            market_data = self.market_data_cache.get(symbol, {})
+            if not market_data:
+                ohlcv = self.exchanges['binance'].fetch_ohlcv(symbol, self.timeframe, limit=50)
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                market_data = self.market_analyzer.calculate_indicators(df)
+                self.market_data_cache[symbol] = df
+            
+            # Calcular tamaño de posición
+            position_size = self.risk_manager.calculate_position_size(
+                signal, self.current_capital, market_data
+            )
+            
+            # Ajustar por peso en portafolio
+            position_size = position_size * weight
+            
+            # Calcular stop loss y take profit
+            stop_loss = self.risk_manager.calculate_stop_loss(
+                current_price, signal_type, market_data
+            )
+            take_profit = self.risk_manager.calculate_take_profit(
+                current_price, stop_loss, signal_type
+            )
+            
+            # Verificar límites de riesgo
+            risk_check, risk_message = self.risk_manager.check_risk_limits(
+                self.current_capital, position_size * abs(current_price - stop_loss)
+            )
+            
+            if not risk_check:
+                print(f"No se abre posición para {symbol}: {risk_message}")
+                return
+            
+            # Determinar lado de la operación
+            side = 'buy' if 'long' in signal_type else 'sell'
+            
+            # Calcular cantidad considering leverage
+            amount = (position_size * self.leverage) / current_price
+            
+            # Ejecutar orden
+            order_result = self.execution_engine.execute_order({
+                'symbol': symbol,
+                'side': side,
+                'type': 'market',
+                'amount': amount
+            })
+            
+            if order_result['success']:
+                # Crear registro de posición
+                position_id = f"{symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                
+                self.positions[position_id] = {
+                    'id': position_id,
+                    'symbol': symbol,
+                    'type': 'long' if 'long' in signal_type else 'short',
+                    'entry_price': current_price,
+                    'size': amount,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'signal': signal,
+                    'weight': weight,
+                    'entry_time': datetime.now(),
+                    'current_price': current_price,
+                    'current_pnl': 0,
+                    'status': 'open',
+                    'leverage': self.leverage
+                }
+                
+                # Colocar órdenes de stop loss y take profit
+                self.execution_engine.set_stop_loss(symbol, amount, stop_loss)
+                self.execution_engine.set_take_profit(symbol, amount, take_profit)
+                
+                print(f"Posición abierta: {position_id} - {side} {amount} {symbol} @ {current_price}")
+                print(f"Stop Loss: {stop_loss}, Take Profit: {take_profit}")
+            else:
+                print(f"Error abriendo posición para {symbol}: {order_result['error']}")
+                
+        except Exception as e:
+            print(f"Error abriendo posición para {symbol}: {e}")
+    
+    async def update_position(self, position, signal):
+        """Actualizar una posición existente"""
+        symbol = position['symbol']
+        
+        try:
+            # Obtener precio actual
+            ticker = self.exchanges['binance'].fetch_ticker(symbol)
+            current_price = ticker['last']
+            
+            # Actualizar stop loss si es favorable
+            if position['type'] == 'long' and current_price > position['entry_price'] * 1.02:
+                new_stop_loss = max(position['stop_loss'], position['entry_price'] * 1.005)
+                if new_stop_loss > position['stop_loss']:
+                    position['stop_loss'] = new_stop_loss
+                    print(f"Stop loss ajustado para {symbol}: {new_stop_loss}")
+            
+            elif position['type'] == 'short' and current_price < position['entry_price'] * 0.98:
+                new_stop_loss = min(position['stop_loss'], position['entry_price'] * 0.995)
+                if new_stop_loss < position['stop_loss']:
+                    position['stop_loss'] = new_stop_loss
+                    print(f"Stop loss ajustado para {symbol}: {new_stop_loss}")
+            
+        except Exception as e:
+            print(f"Error actualizando posición para {symbol}: {e}")
+    
+    async def monitor_positions(self):
+        """Monitorear posiciones abiertas"""
+        positions_to_close = []
+        
+        for position_id, position in self.positions.items():
+            if position['status'] != 'open':
+                continue
+                
+            symbol = position['symbol']
+            
+            try:
+                # Obtener precio actual
+                ticker = self.exchanges['binance'].fetch_ticker(symbol)
+                current_price = ticker['last']
+                
+                # Actualizar posición
+                self.risk_manager.update_position(position_id, current_price, datetime.now())
+                
+                # Verificar si se debe cerrar la posición
+                should_close, reason = self.risk_manager.should_close_position(
+                    position_id, current_price, {}
+                )
+                
+                if should_close:
+                    positions_to_close.append((position_id, reason))
+                    
+            except Exception as e:
+                print(f"Error monitoreando posición {position_id}: {e}")
+        
+        # Cerrar posiciones si es necesario
+        for position_id, reason in positions_to_close:
+            await self.close_position(position_id, reason)
+    
+    async def close_position(self, position_id, reason):
+        """Cerrar una posición"""
+        if position_id not in self.positions:
+            return
+            
+        position = self.positions[position_id]
+        symbol = position['symbol']
+        
+        try:
+            # Determinar lado de la operación
+            side = 'sell' if position['type'] == 'long' else 'buy'
+            
+            # Ejecutar orden de cierre
+            order_result = self.execution_engine.execute_order({
+                'symbol': symbol,
+                'side': side,
+                'type': 'market',
+                'amount': position['size']
+            })
+            
+            if order_result['success']:
+                # Actualizar estado de posición
+                position['status'] = 'closed'
+                position['close_time'] = datetime.now()
+                position['close_reason'] = reason
+                
+                # Calcular P&L final
+                if position['type'] == 'long':
+                    final_pnl = (position['current_price'] - position['entry_price']) * position['size']
+                else:
+                    final_pnl = (position['entry_price'] - position['current_price']) * position['size']
+                
+                position['final_pnl'] = final_pnl
+                
+                # Actualizar capital
+                self.current_capital += final_pnl
+                
+                # Actualizar sistema adaptativo
+                self.adaptive_system.update_performance({
+                    'signal_type': position['signal']['type'],
+                    'pnl': final_pnl,
+                    'duration': (position['close_time'] - position['entry_time']).total_seconds() / 3600
+                })
+                
+                print(f"Posición cerrada: {position_id} - {reason}")
+                print(f"P&L: ${final_pnl:.2f}, Capital actual: ${self.current_capital:.2f}")
+                
+                # Mover a historial
+                self.performance_history.append(position)
+                
+                # Eliminar de posiciones activas
+                del self.positions[position_id]
+            else:
+                print(f"Error cerrando posición {position_id}: {order_result['error']}")
+                
+        except Exception as e:
+            print(f"Error cerrando posición {position_id}: {e}")
+    
+    def update_performance(self):
+        """Actualizar métricas de rendimiento"""
+        if not self.performance_history:
+            return
+            
+        # P&L total
+        total_pnl = sum(p.get('final_pnl', 0) for p in self.performance_history)
+        
+        # Win rate
+        winning_trades = [p for p in self.performance_history if p.get('final_pnl', 0) > 0]
+        losing_trades = [p for p in self.performance_history if p.get('final_pnl', 0) <= 0]
+        win_rate = len(winning_trades) / len(self.performance_history) if self.performance_history else 0
+        
+        # Profit factor
+        gross_profit = sum(p.get('final_pnl', 0) for p in winning_trades)
+        gross_loss = abs(sum(p.get('final_pnl', 0) for p in losing_trades))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        
+        # Drawdown actual
+        current_drawdown = (self.peak_capital - self.current_capital) / self.peak_capital
+        if current_drawdown > self.max_drawdown:
+            self.max_drawdown = current_drawdown
+        
+        # Actualizar pico de capital
+        if self.current_capital > self.peak_capital:
+            self.peak_capital = self.current_capital
+        
+        # Guardar métricas
+        self.win_rate = win_rate
+        self.profit_factor = profit_factor
+        
+        # Imprimir resumen
+        print("\n=== Resumen de Rendimiento Mejorado ===")
+        print(f"Operaciones totales: {len(self.performance_history)}")
+        print(f"Capital inicial: ${self.initial_capital:,.2f}")
+        print(f"Capital actual: ${self.current_capital:,.2f}")
+        print(f"P&L total: ${total_pnl:,.2f} ({(total_pnl/self.initial_capital)*100:.2f}%)")
+        print(f"Win rate: {win_rate:.2%}")
+        print(f"Profit factor: {profit_factor:.2f}")
+        print(f"Drawdown máximo: {self.max_drawdown:.2%}")
+        print(f"Posiciones abiertas: {len(self.positions)}")
+        print("========================================\n")
+    
+    async def run(self, interval_minutes=60):
+        """Ejecutar el sistema de trading continuamente"""
+        print(f"Iniciando Enhanced Quantum Alpha Desktop con intervalo de {interval_minutes} minutos")
+        
+        # Inicializar componentes
+        await self.initialize()
+        
+        self.is_running = True
+        
+        while self.is_running:
+            try:
+                # Ejecutar ciclo de trading
+                await self.run_trading_cycle()
+                
+                # Esperar hasta el siguiente ciclo
+                print(f"Esperando {interval_minutes} minutos hasta el siguiente ciclo...")
+                await asyncio.sleep(interval_minutes * 60)
+                
+            except KeyboardInterrupt:
+                print("\nDeteniendo Enhanced Quantum Alpha Desktop...")
+                self.is_running = False
+            except Exception as e:
+                print(f"Error en ciclo de trading: {e}")
+                await asyncio.sleep(60)
+        
+        print("Enhanced Quantum Alpha Desktop detenido")
+    
+    def stop(self):
+        """Detener el sistema de trading"""
+        self.is_running = False
+    
+    def save_models(self, path):
+        """Guardar modelos entrenados"""
+        import joblib
+        
+        if not self.ml_predictor.is_trained:
+            print("Modelos no entrenados. No se pueden guardar.")
+            return
+        
+        try:
+            import os
+            os.makedirs(path, exist_ok=True)
+            
+            # Guardar cada modelo
+            for model_name, model in self.ml_predictor.models.items():
+                joblib.dump(model, f"{path}/{model_name}_model.pkl")
+                joblib.dump(self.ml_predictor.scalers[model_name], f"{path}/{model_name}_scaler.pkl")
+            
+            print(f"Modelos guardados en {path}")
+            
+        except Exception as e:
+            print(f"Error guardando modelos: {e}")
+    
+    def load_models(self, path):
+        """Cargar modelos entrenados"""
+        import joblib
+        import os
+        
+        try:
+            if not os.path.exists(path):
+                print(f"El directorio {path} no existe.")
+                return
+            
+            for model_name in ['rf', 'gb']:
+                model_path = f"{path}/{model_name}_model.pkl"
+                scaler_path = f"{path}/{model_name}_scaler.pkl"
+                
+                if os.path.exists(model_path) and os.path.exists(scaler_path):
+                    self.ml_predictor.models[model_name] = joblib.load(model_path)
+                    self.ml_predictor.scalers[model_name] = joblib.load(scaler_path)
+            
+            self.ml_predictor.is_trained = True
+            print(f"Modelos cargados desde {path}")
+            
+        except Exception as e:
+            print(f"Error cargando modelos: {e}")
+
+
+async def main():
+    """Función principal para ejecutar Enhanced Quantum Alpha Desktop"""
+    quantum_alpha = EnhancedQuantumAlphaDesktop(initial_capital=10000)
+    await quantum_alpha.run(interval_minutes=60)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

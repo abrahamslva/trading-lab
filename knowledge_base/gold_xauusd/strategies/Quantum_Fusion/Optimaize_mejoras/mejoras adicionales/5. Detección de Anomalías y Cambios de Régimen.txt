@@ -1,0 +1,180 @@
+5. Detección de Anomalías y Cambios de Régimen
+
+class RegimeDetector:
+    def __init__(self):
+        self.regime_models = {}
+        self.regime_history = []
+    
+    def detect_market_regime_advanced(self, df):
+        """Detección avanzada de régimen usando múltiples métodos"""
+        regimes = {}
+        
+        # Método 1: Análisis de componentes principales
+        regimes['pca'] = self.pca_regime_detection(df)
+        
+        # Método 2: Hidden Markov Models
+        regimes['hmm'] = self.hmm_regime_detection(df)
+        
+        # Método 3: Change point detection
+        regimes['change_point'] = self.change_point_detection(df)
+        
+        # Método 4: Cluster analysis
+        regimes['cluster'] = self.cluster_regime_detection(df)
+        
+        # Combinar predicciones
+        combined_regime = self.combine_regime_predictions(regimes)
+        
+        return combined_regime
+    
+    def pca_regime_detection(self, df):
+        """Detección de régimen usando PCA"""
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+        
+        # Seleccionar características
+        features = df[['close', 'volume', 'volatility', 'rsi']].dropna()
+        
+        if len(features) < 10:
+            return pd.Series(0, index=df.index)
+        
+        # Estandarizar
+        scaler = StandardScaler()
+        features_scaled = scaler.fit_transform(features)
+        
+        # PCA
+        pca = PCA(n_components=2)
+        principal_components = pca.fit_transform(features_scaled)
+        
+        # Clasificar régimen basado en componentes principales
+        regime = pd.Series(0, index=features.index)
+        
+        # Simple clasificación por cuadrantes
+        regime[(principal_components[:, 0] > 0) & (principal_components[:, 1] > 0)] = 1
+        regime[(principal_components[:, 0] < 0) & (principal_components[:, 1] < 0)] = -1
+        
+        return regime.reindex(df.index, fill_value=0)
+    
+    def hmm_regime_detection(self, df):
+        """Detección de régimen usando Hidden Markov Models"""
+        try:
+            from hmmlearn import hmm
+            
+            # Preparar datos
+            returns = df['close'].pct_change().dropna()
+            if len(returns) < 50:
+                return pd.Series(0, index=df.index)
+            
+            # Reshape para HMM
+            X = returns.values.reshape(-1, 1)
+            
+            # Entrenar HMM
+            model = hmm.GaussianHMM(n_components=3, covariance_type="diag", n_iter=100)
+            model.fit(X)
+            
+            # Predecir estados ocultos
+            hidden_states = model.predict(X)
+            
+            # Crear serie de tiempo
+            regime = pd.Series(hidden_states, index=returns.index)
+            
+            # Mapear estados a regímenes (-1, 0, 1)
+            regime_mapped = regime.map({0: -1, 1: 0, 2: 1})
+            
+            return regime_mapped.reindex(df.index, fill_value=0)
+        except:
+            return pd.Series(0, index=df.index)
+    
+    def change_point_detection(self, df):
+        """Detección de puntos de cambio"""
+        try:
+            from ruptures import Pelt
+            
+            # Preparar datos
+            returns = df['close'].pct_change().dropna()
+            if len(returns) < 20:
+                return pd.Series(0, index=df.index)
+            
+            # Detección de puntos de cambio
+            algo = Pelt(model="rbf").fit(returns.values)
+            change_points = algo.predict(pen=10)
+            
+            # Crear régimen basado en puntos de cambio
+            regime = pd.Series(0, index=returns.index)
+            
+            for i in range(len(change_points) - 1):
+                start_idx = 0 if i == 0 else change_points[i-1]
+                end_idx = change_points[i]
+                
+                # Determinar régimen para este segmento
+                segment_returns = returns.iloc[start_idx:end_idx]
+                if len(segment_returns) > 0:
+                    if segment_returns.mean() > 0.001:
+                        regime.iloc[start_idx:end_idx] = 1
+                    elif segment_returns.mean() < -0.001:
+                        regime.iloc[start_idx:end_idx] = -1
+            
+            return regime.reindex(df.index, fill_value=0)
+        except:
+            return pd.Series(0, index=df.index)
+    
+    def cluster_regime_detection(self, df):
+        """Detección de régimen usando clustering"""
+        from sklearn.cluster import KMeans
+        from sklearn.preprocessing import StandardScaler
+        
+        # Preparar características
+        features = df[['returns', 'volatility', 'rsi', 'volume_ratio']].dropna()
+        if len(features) < 20:
+            return pd.Series(0, index=df.index)
+        
+        # Estandarizar
+        scaler = StandardScaler()
+        features_scaled = scaler.fit_transform(features)
+        
+        # K-means clustering
+        kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+        clusters = kmeans.fit_predict(features_scaled)
+        
+        # Mapear clusters a regímenes
+        regime = pd.Series(clusters, index=features.index)
+        
+        # Determinar qué cluster corresponde a cada régimen
+        cluster_means = features.groupby(clusters).mean()
+        
+        # Cluster con mayor retorno positivo = régimen alcista (1)
+        # Cluster con mayor retorno negativo = régimen bajista (-1)
+        # Cluster neutro = régimen lateral (0)
+        regime_mapping = {}
+        for cluster_id in range(3):
+            mean_return = cluster_means.loc[cluster_id, 'returns']
+            if mean_return > 0.001:
+                regime_mapping[cluster_id] = 1
+            elif mean_return < -0.001:
+                regime_mapping[cluster_id] = -1
+            else:
+                regime_mapping[cluster_id] = 0
+        
+        regime_mapped = regime.map(regime_mapping)
+        
+        return regime_mapped.reindex(df.index, fill_value=0)
+    
+    def combine_regime_predictions(self, regime_dict):
+        """Combinar predicciones de múltiples métodos"""
+        if not regime_dict:
+            return pd.Series(0, index=df.index)
+        
+        # Votación ponderada
+        weights = {'pca': 0.3, 'hmm': 0.3, 'change_point': 0.2, 'cluster': 0.2}
+        
+        combined = pd.Series(0.0, index=df.index)
+        
+        for method, regime_series in regime_dict.items():
+            if method in weights:
+                combined += regime_series * weights[method]
+        
+        # Redondear a regímenes discretos
+        final_regime = pd.Series(0, index=df.index)
+        final_regime[combined > 0.3] = 1
+        final_regime[combined < -0.3] = -1
+        
+        return final_regime

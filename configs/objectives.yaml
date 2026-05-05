@@ -1,0 +1,51 @@
+# configs/objectives.yaml — Optuna optimization constraints & search space
+
+constraints:
+  min_sharpe: 0.5             # Sharpe Ratio >= this
+  max_drawdown: 10.0          # Max Drawdown [%] <= this (absolute value, portfolio-wide)
+  max_daily_loss: 2.0         # Worst single-day loss [%] <= this
+  min_trades_per_month: 7     # Minimum trades per calendar month (every month)
+  min_monthly_return: 1.5     # Minimum return [%] in the worst calendar month
+
+objective:
+  # Primary metric to maximize (must satisfy constraints first)
+  primary: "sharpe"
+  # Composite score = w_sharpe*sharpe + w_return*return_pct - w_drawdown*drawdown_pct
+  # Tie-breaker weights (small enough not to override constraint logic)
+  weights:
+    sharpe: 1.0
+    return: 0.005          # small weight for total return [%]
+    drawdown: 0.002        # penalty for drawdown [%]  (subtracted)
+
+stopping:
+  max_trials: 200          # hard cap — study stops after this many trials
+  n_feasible: 20           # early-stop once this many constraint-passing trials found
+
+search_space:
+  fast_window:
+    low: 5
+    high: 50
+    step: 1
+  slow_window:
+    low: 20
+    high: 200
+    step: 1
+  ma_type:
+    choices:
+      - "simple"
+      - "exponential"
+
+# Timeframes to optimize independently (must exist in data/ after pipeline run)
+timeframes:
+  - "1D"
+
+optuna:
+  sampler: "tpe"           # tpe | random | cmaes
+  seed: 42
+  show_progress_bar: true
+
+output:
+  results_dir: "results"
+  best_params_json: "results/best_params.json"
+  leaderboard_csv: "results/leaderboard.csv"
+  leaderboard_top_n: 50

@@ -1,0 +1,5 @@
+Address label,Whitelist,Coin,Address,Network,Memo,Address origin
+Todas,true,,0x42b94f36d3d32e5cead71ca6a47e5b1a6d68cdbb,BSC,,Binance
+USDT,true,USDT,0x42b94f36d3d32e5cead71ca6a47e5b1a6d68cdbb,ETH,,Binance
+Ether,true,ETH,0x42b94f36d3d32e5cead71ca6a47e5b1a6d68cdbb,ETH,,Binance
+Bitcoin,true,BTC,12qLtvptbGxLMGPpRKHq7zrEjjoJbBRuje,BTC,,Binance

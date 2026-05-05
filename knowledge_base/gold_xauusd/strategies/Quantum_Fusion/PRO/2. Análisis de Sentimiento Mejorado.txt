@@ -1,0 +1,182 @@
+2. Análisis de Sentimiento Mejorado
+
+import tweepy
+import praw
+import requests
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import pandas as pd
+from datetime import datetime, timedelta
+import numpy as np
+from textblob import TextBlob
+
+class SentimentAnalyzerPro:
+    def __init__(self, config):
+        self.vader = SentimentIntensityAnalyzer()
+        self.twitter_config = config['twitter']
+        self.reddit_config = config['reddit']
+        self.news_config = config['news']
+        self.telegram_config = config.get('telegram', {})
+        
+        # Inicializar APIs
+        self.twitter_client = tweepy.Client(bearer_token=self.twitter_config['bearer_token'])
+        self.reddit = praw.Reddit(
+            client_id=self.reddit_config['client_id'],
+            client_secret=self.reddit_config['client_secret'],
+            user_agent="quantum_fusion_pro"
+        )
+        
+        # Pesos para cada fuente (ajustables según rendimiento histórico)
+        self.source_weights = {
+            'twitter': 0.35,
+            'reddit': 0.25,
+            'news': 0.20,
+            'telegram': 0.20
+        }
+    
+    def get_twitter_sentiment(self, query, count=100):
+        """Obtener sentimiento de Twitter con análisis mejorado"""
+        tweets = tweepy.Paginator(
+            self.twitter_client.search_recent_tweets,
+            query=query,
+            tweet_fields=["created_at", "public_metrics"],
+            max_results=100
+        ).flatten(limit=count)
+        
+        sentiments = []
+        for tweet in tweets:
+            # Análisis VADER
+            vader_sentiment = self.vader.polarity_scores(tweet.text)
+            
+            # Análisis TextBlob
+            blob_sentiment = TextBlob(tweet.text).sentiment.polarity
+            
+            # Combinar ambos análisis
+            combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+            
+            # Ponderar por engagement (likes, retweets)
+            engagement = tweet.public_metrics.get('like_count', 0) + tweet.public_metrics.get('retweet_count', 0)
+            weight = min(1.0, np.log1p(engagement) / 5)  # Log scaling para evitar valores extremos
+            
+            sentiments.append({
+                'timestamp': tweet.created_at,
+                'compound': combined_sentiment * weight,
+                'source': 'twitter'
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def get_reddit_sentiment(self, subreddit, limit=50):
+        """Obtener sentimiento de Reddit con análisis mejorado"""
+        sentiments = []
+        for submission in self.reddit.subreddit(subreddit).hot(limit=limit):
+            # Análisis VADER
+            vader_sentiment = self.vader.polarity_scores(submission.title)
+            
+            # Análisis TextBlob
+            blob_sentiment = TextBlob(submission.title).sentiment.polarity
+            
+            # Combinar ambos análisis
+            combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+            
+            # Ponderar por upvotes y comentarios
+            engagement = submission.score + submission.num_comments
+            weight = min(1.0, np.log1p(engagement) / 10)
+            
+            sentiments.append({
+                'timestamp': datetime.fromtimestamp(submission.created_utc),
+                'compound': combined_sentiment * weight,
+                'source': 'reddit'
+            })
+            
+            # Analizar comentarios principales
+            submission.comments.replace_more(limit=0)
+            for comment in submission.comments.list()[:10]:  # Limitar a 10 comentarios por post
+                if hasattr(comment, 'body'):
+                    comment_sentiment = self.vader.polarity_scores(comment.body)['compound']
+                    comment_weight = min(1.0, np.log1p(comment.score) / 5)
+                    
+                    sentiments.append({
+                        'timestamp': datetime.fromtimestamp(comment.created_utc),
+                        'compound': comment_sentiment * comment_weight * 0.5,  # Menor peso para comentarios
+                        'source': 'reddit'
+                    })
+        
+        return pd.DataFrame(sentiments)
+    
+    def get_news_sentiment(self, query, days=7):
+        """Obtener sentimiento de noticias con análisis mejorado"""
+        url = f"https://newsapi.org/v2/everything?q={query}&from={(datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')}&sortBy=publishedAt&apiKey={self.news_config['api_key']}"
+        response = requests.get(url)
+        articles = response.json().get('articles', [])
+        
+        sentiments = []
+        for article in articles:
+            # Análisis VADER
+            vader_sentiment = self.vader.polarity_scores(article['title'])
+            
+            # Análisis TextBlob
+            blob_sentiment = TextBlob(article['title']).sentiment.polarity
+            
+            # Combinar ambos análisis
+            combined_sentiment = (vader_sentiment['compound'] + blob_sentiment) / 2
+            
+            # Ponderar por fuente (fuentes más reputadas tienen más peso)
+            source_weight = 1.0
+            if 'bloomberg' in article['source']['name'].lower():
+                source_weight = 1.2
+            elif 'reuters' in article['source']['name'].lower():
+                source_weight = 1.15
+            elif 'cointelegraph' in article['source']['name'].lower():
+                source_weight = 1.1
+            
+            sentiments.append({
+                'timestamp': article['publishedAt'],
+                'compound': combined_sentiment * source_weight,
+                'source': 'news'
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def get_telegram_sentiment(self, query, limit=30):
+        """Obtener sentimiento de Telegram (requiere configuración adicional)"""
+        # Esta función requiere una API de Telegram y configuración adicional
+        # Es un placeholder para la implementación
+        sentiments = []
+        
+        # Simulación para ejemplo
+        for i in range(limit):
+            random_sentiment = np.random.uniform(-1, 1)
+            sentiments.append({
+                'timestamp': datetime.now() - timedelta(hours=i),
+                'compound': random_sentiment,
+                'source': 'telegram'
+            })
+        
+        return pd.DataFrame(sentiments)
+    
+    def aggregate_sentiment(self, dataframes):
+        """Agrega sentimientos de múltiples fuentes con ponderación"""
+        df = pd.concat(dataframes)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.set_index('timestamp')
+        
+        # Aplicar pesos por fuente
+        for source, weight in self.source_weights.items():
+            df.loc[df['source'] == source, 'compound'] *= weight
+        
+        # Resample a 1 hora y calcular el sentimiento promedio
+        hourly_sentiment = df.resample('1H')['compound'].mean()
+        
+        # Suavizar con media móvil exponencial
+        smoothed_sentiment = hourly_sentiment.ewm(span=3).mean()
+        
+        # Calcular la volatilidad del sentimiento como característica adicional
+        sentiment_volatility = hourly_sentiment.rolling(5).std()
+        
+        # Combinar sentimiento suavizado y volatilidad
+        result = pd.DataFrame({
+            'sentiment': smoothed_sentiment.fillna(0),
+            'sentiment_volatility': sentiment_volatility.fillna(0)
+        })
+        
+        return result

@@ -1,0 +1,216 @@
+7. Integración Final en main.py
+
+# main.py - Integración final de todas las mejoras
+class QuantumTradingUltimate:
+    def __init__(self, config_path: str = None):
+        # ... código existente ...
+        
+        # Inicializar todos los nuevos componentes
+        self.hedging_manager = HedgingManager(self.config)
+        self.correlation_monitor = CorrelationMonitor(self.config)
+        self.microstructure_analyzer = MicrostructureAnalyzer(self.config)
+        self.dynamic_sizing = DynamicOrderSizing(self.config)
+        self.multi_temporal_ensemble = MultiTemporalEnsemble(self.config)
+        self.feature_monitor = FeatureImportanceMonitor(self.config)
+        
+        # Modelo principal ahora es el ensemble multi-temporal
+        self.model = self.multi_temporal_ensemble
+    
+    def execute_trade(self, symbol: str, signal: str, signal_strength: float, 
+                     market_conditions: Dict):
+        """Ejecutar operación con todas las optimizaciones"""
+        if signal == 'hold':
+            return
+        
+        try:
+            # Obtener precio actual y order book
+            ticker = self.exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            order_book = self.exchange.fetch_order_book(symbol, limit=20)
+            
+            # Análisis de microestructura para timing
+            microstructure_analysis = self.microstructure_analyzer.analyze_order_flow(
+                symbol, order_book
+            )
+            
+            # Si no es timing óptimo, esperar
+            if not microstructure_analysis['optimal_timing'] and \
+               microstructure_analysis['confidence'] > 0.7:
+                self.logger.info(f"Timing no óptimo para {symbol}, posponiendo ejecución")
+                return
+            
+            # Calcular tamaño base
+            account_state = self.risk_manager.portfolio_state.copy()
+            base_position_size, risk_factors = \
+                self.risk_manager.calculate_position_size(
+                    signal_strength, pd.DataFrame(), account_state
+                )
+            
+            # Calcular tamaño dinámico óptimo
+            optimal_size = self.dynamic_sizing.calculate_optimal_order_size(
+                symbol, base_position_size, order_book, market_conditions
+            )
+            
+            # Seleccionar método de ejecución
+            execution_method = self.execution_optimizer.select_optimal_execution_method(
+                symbol, optimal_size, market_conditions
+            )
+            
+            # Ejecutar orden
+            orders, executed_size = \
+                self.execution_optimizer.execute_order_with_method(
+                    self.exchange, symbol, signal, optimal_size,
+                    execution_method, market_conditions
+                )
+            
+            if executed_size > 0:
+                # Calcular stops adaptativos
+                features = self.prepare_features(symbol)
+                stop_loss = self.risk_manager.calculate_adaptive_stop_loss(
+                    {'side': signal, 'signal_strength': signal_strength},
+                    current_price, features.iloc[-1:] if not features.empty else pd.DataFrame()
+                )
+                take_profit = self.risk_manager.calculate_take_profit(
+                    current_price, stop_loss, signal == 'buy'
+                )
+                
+                # Guardar posición
+                self.positions[symbol] = {
+                    'side': signal,
+                    'entry_price': current_price,
+                    'quantity': executed_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'orders': orders,
+                    'signal_strength': signal_strength,
+                    'entry_time': datetime.now(),
+                    'risk_factors': risk_factors,
+                    'market_conditions': market_conditions,
+                    'execution_method': execution_method,
+                    'microstructure_analysis': microstructure_analysis
+                }
+                
+                self.logger.info(
+                    f"{signal.upper()} ejecutada: {symbol} @ {current_price}, "
+                    f"Cantidad: {executed_size}, Método: {execution_method}"
+                )
+                
+                # Verificar si se necesita cobertura
+                self.check_hedge_requirements()
+                
+                # Actualizar importancia de características
+                if not features.empty:
+                    self.feature_monitor.update_feature_importance(
+                        self.model, features, list(features.columns)
+                    )
+            
+        except Exception as e:
+            self.logger.error(f"Error ejecutando operación para {symbol}: {e}")
+    
+    def check_hedge_requirements(self):
+        """Verificar si se requiere cobertura"""
+        try:
+            # Obtener precios actuales
+            current_prices = {}
+            for symbol in self.positions.keys():
+                try:
+                    ticker = self.exchange.fetch_ticker(symbol)
+                    current_prices[symbol] = ticker['last']
+                except:
+                    current_prices[symbol] = self.positions[symbol]['entry_price']
+            
+            # Verificar cobertura delta
+            if self.config['hedging']['delta_hedging']['enabled']:
+                self.hedging_manager.execute_delta_hedge(
+                    self.positions, current_prices
+                )
+            
+            # Verificar cobertura de cola
+            if self.config['hedging']['tail_hedging']['enabled']:
+                # Obtener condiciones de mercado
+                market_conditions = {}
+                for symbol in self.positions.keys():
+                    features = self.prepare_features(symbol)
+                    if not features.empty:
+                        market_conditions[symbol] = self.analyze_market_conditions(features)
+                
+                self.hedging_manager.execute_tail_hedge(market_conditions)
+            
+        except Exception as e:
+            self.logger.error(f"Error verificando requerimientos de cobertura: {e}")
+    
+    def update_portfolio_state(self):
+        """Actualizar estado completo del portafolio"""
+        try:
+            # ... código existente ...
+            
+            # Actualizar correlaciones
+            market_data = {}
+            for symbol in self.positions.keys():
+                try:
+                    df = self.get_market_data(symbol, '1h', 100)
+                    if not df.empty:
+                        market_data[symbol] = df
+                except:
+                    pass
+            
+            if market_data:
+                correlation_matrix = self.correlation_monitor.update_correlations(market_data)
+                
+                if correlation_matrix is not None:
+                    # Agregar correlación promedio a condiciones de mercado
+                    avg_correlation = self.correlation_monitor.get_average_correlation(
+                        correlation_matrix
+                    )
+                    portfolio_state['avg_correlation'] = avg_correlation
+                    
+                    # Agregar puntaje de diversificación
+                    diversification_score = self.correlation_monitor.get_diversification_score(
+                        correlation_matrix
+                    )
+                    portfolio_state['diversification_score'] = diversification_score
+            
+            # Rebalancear coberturas
+            self.hedging_manager.rebalance_hedges(self.positions, current_prices)
+            
+            return portfolio_state
+            
+        except Exception as e:
+            self.logger.error(f"Error actualizando estado del portafolio: {e}")
+            return {}
+    
+    def train_model(self, symbol: str) -> float:
+        """Entrenar modelo con ensemble multi-temporal"""
+        try:
+            self.logger.info(f"Entrenando modelo multi-temporal para {symbol}...")
+            
+            # Preparar características
+            features = self.prepare_features(symbol)
+            if features.empty or len(features) < 500:
+                self.logger.error("No se pudieron preparar suficientes características")
+                return 0.0
+            
+            # Preparar etiquetas
+            labels = self.prepare_labels(features)
+            
+            # Entrenar ensemble multi-temporal
+            self.multi_temporal_ensemble.train_temporal_models(features, labels)
+            
+            # Guardar modelo
+            self.multi_temporal_ensemble.save_model(f'{symbol}_multi_temporal')
+            
+            # Registrar actualización
+            self.last_model_update = datetime.now()
+            self.model_update_history.append({
+                'timestamp': self.last_model_update,
+                'symbol': symbol,
+                'model_type': 'multi_temporal_ensemble',
+                'features_count': len(features.columns)
+            })
+            
+            self.logger.info(f"Modelo multi-temporal entrenado para {symbol}")
+            return 0.8  # Accuracy estimada
+            
+        except Exception as e:
+            self.logger.error(f"Error entrenando modelo para {symbol}: {e}")
+            return 0.0

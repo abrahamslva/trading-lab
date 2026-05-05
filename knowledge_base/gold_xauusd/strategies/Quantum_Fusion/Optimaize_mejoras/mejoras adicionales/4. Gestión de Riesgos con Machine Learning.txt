@@ -1,0 +1,96 @@
+4. Gestión de Riesgos con Machine Learning
+
+class MLRiskManager:
+    def __init__(self):
+        self.risk_models = {}
+        self.risk_history = []
+    
+    def train_risk_models(self, features, returns):
+        """Entrenar modelos para predecir riesgo"""
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.svm import SVR
+        
+        # Crear etiquetas de riesgo
+        volatility_5d = returns.rolling(5).std()
+        max_drawdown_5d = self.calculate_rolling_max_drawdown(returns, 5)
+        
+        # Modelo de predicción de volatilidad
+        vol_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        vol_model.fit(features, volatility_5d)
+        self.risk_models['volatility'] = vol_model
+        
+        # Modelo de predicción de drawdown
+        dd_model = SVR(kernel='rbf', C=1.0, gamma='scale')
+        dd_model.fit(features, max_drawdown_5d)
+        self.risk_models['drawdown'] = dd_model
+    
+    def dynamic_risk_adjustment(self, signal_strength, predicted_risk, account_state):
+        """Ajuste dinámico de riesgo basado en predicciones ML"""
+        
+        # Factores de riesgo
+        volatility_risk = self.risk_models['volatility'].predict(signal_strength.reshape(1, -1))[0]
+        drawdown_risk = self.risk_models['drawdown'].predict(signal_strength.reshape(1, -1))[0]
+        
+        # Ajustar tamaño de posición según riesgo predicho
+        risk_multiplier = 1.0
+        
+        # Reducir exposición en alta volatilidad predicha
+        if volatility_risk > 0.05:  # 5% volatilidad predicha
+            risk_multiplier *= 0.7
+        
+        # Reducir exposición en alto riesgo de drawdown
+        if drawdown_risk > 0.03:  # 3% drawdown predicho
+            risk_multiplier *= 0.8
+        
+        # Ajustar según estado actual de la cuenta
+        current_drawdown = account_state['current_drawdown']
+        if current_drawdown > 0.05:  # 5% drawdown actual
+            risk_multiplier *= 0.6
+        
+        # Ajustar según rendimiento reciente
+        recent_performance = account_state['recent_performance']
+        if recent_performance < -0.02:  # -2% rendimiento reciente
+            risk_multiplier *= 0.7
+        
+        return risk_multiplier
+    
+    def calculate_rolling_max_drawdown(self, returns, window):
+        """Calcular máximo drawdown rolling"""
+        cumulative = (1 + returns).cumprod()
+        rolling_max = cumulative.rolling(window=window, min_periods=1).max()
+        drawdown = (cumulative - rolling_max) / rolling_max
+        return -drawdown.min()
+    
+    def portfolio_optimization_ml(self, expected_returns, risk_predictions, constraints):
+        """Optimización de portafolio usando machine learning"""
+        from scipy.optimize import minimize
+        
+        n_assets = len(expected_returns)
+        
+        def portfolio_variance(weights):
+            return np.dot(weights.T, np.dot(risk_predictions, weights))
+        
+        def portfolio_return(weights):
+            return np.dot(weights, expected_returns)
+        
+        def objective(weights):
+            return -portfolio_return(weights) / np.sqrt(portfolio_variance(weights))
+        
+        # Restricciones
+        constraints = [
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}  # Suma de pesos = 1
+        ]
+        
+        # Límites
+        bounds = tuple((0, 1) for _ in range(n_assets))
+        
+        # Optimización
+        result = minimize(
+            objective,
+            x0=np.array([1/n_assets] * n_assets),
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints
+        )
+        
+        return result.x

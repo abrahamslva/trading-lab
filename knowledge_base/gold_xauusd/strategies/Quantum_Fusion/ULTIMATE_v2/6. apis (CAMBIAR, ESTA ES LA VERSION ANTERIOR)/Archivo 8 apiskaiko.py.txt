@@ -1,0 +1,201 @@
+Archivo 8: apis/kaiko.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+KAIKO API ANALYZER
+"""
+
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+class KaikoAnalyzer:
+    """Analizador de datos de Kaiko"""
+    
+    def __init__(self, api_key: str):
+        """Inicializar analizador de Kaiko"""
+        self.api_key = api_key
+        self.base_url = "https://eu.api.kaiko.com/v2"
+    
+    def get_order_book_data(self, exchange: str, pair: str) -> Dict:
+        """Obtener datos de order book"""
+        url = f"{self.base_url}/market/orderbooks/{exchange}/{pair}"
+        headers = {"X-Api-Key": self.api_key}
+        params = {"limit": 10}  # Top 10 niveles
+        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            return response.json()
+        except Exception as e:
+            print(f"Error obteniendo datos de order book: {e}")
+            return {}
+    
+    def calculate_liquidity_metrics(self, order_book_data: Dict) -> Dict:
+        """Calcular métricas de liquidez"""
+        metrics = {}
+        
+        if 'data' in order_book_data:
+            asks = order_book_data['data'].get('asks', [])
+            bids = order_book_data['data'].get('bids', [])
+            
+            if asks and bids:
+                # Calcular spread
+                best_ask = asks[0]['price']
+                best_bid = bids[0]['price']
+                spread = (best_ask - best_bid) / best_bid
+                metrics['spread'] = spread
+                
+                # Calcular profundidad a 1%
+                mid_price = (best_ask + best_bid) / 2
+                ask_depth_1pct = sum(
+                    ask['amount'] for ask in asks 
+                    if ask['price'] <= mid_price * 1.01
+                )
+                bid_depth_1pct = sum(
+                    bid['amount'] for bid in bids 
+                    if bid['price'] >= mid_price * 0.99
+                )
+                metrics['depth_1pct'] = ask_depth_1pct + bid_depth_1pct
+                
+                # Calcular skew (asimetría)
+                metrics['skew'] = (ask_depth_1pct - bid_depth_1pct) / (ask_depth_1pct + bid_depth_1pct + 1e-10)
+                
+                # Calcular concentración
+                total_depth = ask_depth_1pct + bid_depth_1pct
+                ask_concentration = ask_depth_1pct / (total_depth + 1e-10)
+                bid_concentration = bid_depth_1pct / (total_depth + 1e-10)
+                metrics['concentration'] = max(ask_concentration, bid_concentration)
+        
+        return metrics
+    
+    def generate_liquidity_signals(self, metrics: Dict) -> Dict:
+        """Generar señales basadas en liquidez"""
+        signals = {}
+        
+        spread = metrics.get('spread', 0)
+        depth = metrics.get('depth_1pct', 0)
+        skew = metrics.get('skew', 0)
+        
+        # Spread bajo = buena liquidez
+        if spread < 0.001:  # <0.1% spread
+            signals['spread'] = 0.2
+        elif spread > 0.005:  # >0.5% spread
+            signals['spread'] = -0.2
+        
+        # Profundidad alta = buena liquidez
+        if depth > 1000000:  # >$1M de profundidad
+            signals['depth'] = 0.2
+        elif depth < 100000:  # <$100K de profundidad
+            signals['depth'] = -0.2
+        
+        # Skew positivo = más presión de compra
+        if skew > 0.2:
+            signals['skew'] = 0.2
+        elif skew < -0.2:
+            signals['skew'] = -0.2
+        
+        # Concentración alta = posible manipulación
+        concentration = metrics.get('concentration', 0.5)
+        if concentration > 0.7:
+            signals['concentration'] = -0.2
+        
+        return signals
+    
+    def get_trade_data(self, exchange: str, pair: str, start_time: str, end_time: str) -> Dict:
+        """Obtener datos de trades históricos"""
+        url = f"{self.base_url}/market/trades/{exchange}/{pair}"
+        headers = {"X-Api-Key": self.api_key}
+        params = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "limit": 1000
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            return response.json()
+        except Exception as e:
+            print(f"Error obteniendo datos de trades: {e}")
+            return {}
+    
+    def calculate_trade_signals(self, trade_data: Dict) -> Dict:
+        """Calcular señales basadas en datos de trades"""
+        signals = {}
+        
+        if 'data' in trade_data:
+            trades = trade_data['data']
+            
+            if trades:
+                # Calcular volumen promedio
+                avg_volume = np.mean([trade['amount'] for trade in trades])
+                
+                # Calcular volumen reciente
+                recent_volume = trades[-1]['amount']
+                volume_ratio = recent_volume / (avg_volume + 1e-10)
+                
+                if volume_ratio > 3:  # 3x el volumen promedio
+                    signals['volume_spike'] = 0.3
+                
+                # Calcular dirección del precio
+                price_changes = [trade['price'] for trade in trades]
+                if len(price_changes) > 1:
+                    price_direction = np.sign(price_changes[-1] - price_changes[0])
+                    if price_direction > 0:
+                        signals['price_direction'] = 0.2
+                    else:
+                        signals['price_direction'] = -0.2
+        
+        return signals
+    
+    def get_market_depth_data(self, exchange: str, pair: str) -> Dict:
+        """Obtener datos de profundidad de mercado"""
+        url = f"{self.base_url}/market/depth/{exchange}/{pair}"
+        headers = {"X-Api-Key": self.api_key}
+        
+        try:
+            response = requests.get(url, headers=headers)
+            return response.json()
+        except Exception as e:
+            print(f"Error obteniendo datos de profundidad: {e}")
+            return {}
+    
+    def calculate_depth_signals(self, depth_data: Dict) -> Dict:
+        """Calcular señales basadas en profundidad de mercado"""
+        signals = {}
+        
+        if 'data' in depth_data:
+            bids = depth_data['data'].get('bids', [])
+            asks = depth_data['data'].get('asks', [])
+            
+            if bids and asks:
+                # Calcular spread efectivo
+                best_bid = bids[0]['price']
+                best_ask = asks[0]['price']
+                mid_price = (best_ask + best_bid) / 2
+                spread = (best_ask - best_bid) / mid_price
+                
+                # Calcular profundidad acumulada
+                bid_depth = sum(bid['amount'] for bid in bids)
+                ask_depth = sum(ask['amount'] for ask in asks)
+                total_depth = bid_depth + ask_depth
+                
+                # Calcular slippage estimado
+                slippage_1m = (best_ask - best_bid) / mid_price * 0.01  # 1% slippage
+                slippage_5m = (best_ask - best_bid) / mid_price * 0.05  # 5% slippage
+                
+                # Señales basadas en slippage
+                if slippage_1m < 0.002:  # <0.2% slippage
+                    signals['low_slippage'] = 0.2
+                elif slippage_1m > 0.01:  # >1% slippage
+                    signals['high_slippage'] = -0.2
+                
+                # Señales basadas en profundidad
+                if total_depth > 5000000:  # >$5M de profundidad
+                    signals['high_depth'] = 0.2
+                elif total_depth < 500000:  # <$500K de profundidad
+                    signals['low_depth'] = -0.2
+        
+        return signals

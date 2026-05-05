@@ -1,0 +1,2 @@
+Requisitos de Instalación
+pip install numpy pandas talib ccxt tweepy praw requests python-dotenv textblob vaderSentiment scikit-learn xgboost lightgbm joblib pyyaml

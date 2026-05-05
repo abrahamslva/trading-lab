@@ -1,0 +1,148 @@
+3. Modelo de Ensemble Mejorado
+
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.linear_model import LogisticRegression
+import joblib
+import numpy as np
+import pandas as pd
+
+class QuantumModelPro:
+    def __init__(self):
+        self.models = {
+            'xgboost': xgb.XGBClassifier(
+                n_estimators=200,
+                max_depth=6,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                random_state=42
+            ),
+            'lightgbm': lgb.LGBMClassifier(
+                n_estimators=200,
+                max_depth=6,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42
+            ),
+            'randomforest': RandomForestClassifier(
+                n_estimators=200,
+                max_depth=8,
+                min_samples_split=10,
+                random_state=42
+            ),
+            'gradientboosting': GradientBoostingClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                max_depth=6,
+                random_state=42
+            )
+        }
+        
+        self.meta_model = LogisticRegression(random_state=42)
+        self.is_trained = False
+        self.model_weights = None
+        
+    def prepare_labels(self, df, horizon=5):
+        """Preparar etiquetas para clasificación con múltiples horizontes"""
+        future_returns = df['close'].shift(-horizon).pct_change()
+        labels = (future_returns > 0).astype(int)
+        
+        # Añadir etiquetas para diferentes horizontes
+        for h in [3, 8, 12]:
+            df[f'label_{h}'] = (df['close'].shift(-h).pct_change() > 0).astype(int)
+        
+        return labels
+    
+    def train(self, X, y):
+        """Entrenar el modelo con validación cruzada temporal y ensemble"""
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        # Entrenar modelos base
+        model_predictions = {}
+        model_accuracies = {}
+        
+        for name, model in self.models.items():
+            predictions = np.zeros(len(X))
+            accuracies = []
+            
+            for train_idx, test_idx in tscv.split(X):
+                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+                
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                predictions[test_idx] = y_pred
+                
+                accuracies.append(accuracy_score(y_test, y_pred))
+            
+            model_predictions[name] = predictions
+            model_accuracies[name] = np.mean(accuracies)
+            print(f"{name} - Accuracy promedio: {model_accuracies[name]:.4f}")
+        
+        # Crear conjunto de datos para el meta-modelo
+        meta_features = pd.DataFrame(model_predictions)
+        
+        # Entrenar meta-modelo
+        meta_accuracies = []
+        for train_idx, test_idx in tscv.split(X):
+            X_train_meta, X_test_meta = meta_features.iloc[train_idx], meta_features.iloc[test_idx]
+            y_train_meta, y_test_meta = y.iloc[train_idx], y.iloc[test_idx]
+            
+            self.meta_model.fit(X_train_meta, y_train_meta)
+            y_pred_meta = self.meta_model.predict(X_test_meta)
+            
+            meta_accuracies.append(accuracy_score(y_test_meta, y_pred_meta))
+        
+        # Calcular pesos basados en el rendimiento
+        total_accuracy = sum(model_accuracies.values())
+        self.model_weights = {name: acc/total_accuracy for name, acc in model_accuracies.items()}
+        
+        # Entrenar modelos finales en todos los datos
+        for name, model in self.models.items():
+            model.fit(X, y)
+        
+        self.meta_model.fit(meta_features, y)
+        self.is_trained = True
+        
+        print(f"Meta-modelo - Accuracy promedio: {np.mean(meta_accuracies):.4f}")
+        return np.mean(meta_accuracies)
+    
+    def predict(self, X):
+        """Predecir probabilidades usando el ensemble"""
+        if not self.is_trained:
+            raise Exception("Modelo no entrenado")
+        
+        # Obtener predicciones de cada modelo
+        meta_features = pd.DataFrame()
+        for name, model in self.models.items():
+            meta_features[name] = model.predict_proba(X)[:, 1]
+        
+        # Predicción final del meta-modelo
+        final_prediction = self.meta_model.predict_proba(meta_features)[:, 1]
+        
+        return final_prediction
+    
+    def save_model(self, path):
+        """Guardar modelo entrenado"""
+        model_data = {
+            'models': {name: joblib.dump(model, f"{path}_{name}.pkl") for name, model in self.models.items()},
+            'meta_model': joblib.dump(self.meta_model, f"{path}_meta.pkl"),
+            'model_weights': self.model_weights
+        }
+        joblib.dump(model_data, f"{path}_ensemble.pkl")
+    
+    def load_model(self, path):
+        """Cargar modelo entrenado"""
+        model_data = joblib.load(f"{path}_ensemble.pkl")
+        
+        self.models = {name: joblib.load(f"{path}_{name}.pkl") for name in self.models.keys()}
+        self.meta_model = joblib.load(f"{path}_meta.pkl")
+        self.model_weights = model_data['model_weights']
+        self.is_trained = True

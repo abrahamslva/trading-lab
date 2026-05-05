@@ -1,0 +1,274 @@
+Archivo 5: apis/glassnode.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GLASSNODE API ANALYZER
+"""
+
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+class GlassnodeAnalyzer:
+    """Analizador de datos de Glassnode"""
+    
+    def __init__(self, api_key: str):
+        """Inicializar analizador de Glassnode"""
+        self.api_key = api_key
+        self.base_url = "https://api.glassnode.com/v1/metrics"
+    
+    def get_whale_intelligence(self, asset: str) -> Dict:
+        """Obtener datos de inteligencia de ballenas"""
+        endpoints = [
+            "/indicators/sopr",  # Spent Output Profit Ratio
+            "/indicators/net_unrealized_profit_loss",  # NUPL
+            "/entities/exchanges/net_position_change",  # Cambio neto de exchanges
+            "/entities/miners/net_position_change",  # Cambio neto de mineros
+            "/distribution/balance_1pct_holders",  # Balance de tenedores del 1%
+        ]
+        
+        whale_data = {}
+        for endpoint in endpoints:
+            url = f"{self.base_url}{endpoint}"
+            params = {
+                "a": asset,
+                "api_key": self.api_key,
+                "s": "24h",  # Resolución de 24 horas
+                "c": "USD"
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                whale_data[endpoint.split('/')[-1]] = response.json()
+            except Exception as e:
+                print(f"Error en endpoint {endpoint}: {e}")
+                whale_data[endpoint.split('/')[-1]] = {}
+        
+        return whale_data
+    
+    def calculate_whale_signal(self, whale_data: Dict) -> Dict:
+        """Calcular señal basada en actividad de ballenas"""
+        signals = {}
+        
+        # SOPR (Spent Output Profit Ratio)
+        sopr = whale_data.get('sopr', {}).get('data', [])
+        if sopr:
+            latest_sopr = sopr[-1]['v']
+            if latest_sopr > 1.1:  # Ballenas tomando ganancias
+                signals['sopr'] = -0.3  # Señal bajista
+            elif latest_sopr < 0.95:  # Ballenas acumulando
+                signals['sopr'] = 0.3   # Señal alcista
+        
+        # NUPL (Net Unrealized Profit/Loss)
+        nupl = whale_data.get('net_unrealized_profit_loss', {}).get('data', [])
+        if nupl:
+            latest_nupl = nupl[-1]['v']
+            if latest_nupl > 0.75:  # Euforia del mercado
+                signals['nupl'] = -0.4
+            elif latest_nupl < 0:  # Miedo extremo
+                signals['nupl'] = 0.4
+        
+        # Posición neta de exchanges
+        exchange_flow = whale_data.get('net_position_change', {}).get('data', [])
+        if exchange_flow:
+            latest_flow = exchange_flow[-1]['v']
+            if latest_flow > 1000:  # Salida de exchanges
+                signals['exchange_flow'] = 0.3
+            elif latest_flow < -1000:  # Entrada a exchanges
+                signals['exchange_flow'] = -0.3
+        
+        # Posición neta de mineros
+        miner_flow = whale_data.get('miners_net_position_change', {}).get('data', [])
+        if miner_flow:
+            latest_flow = miner_flow[-1]['v']
+            if latest_flow > 500:  # Mineros vendiendo
+                signals['miner_flow'] = -0.2
+            elif latest_flow < -500:  # Mineros acumulando
+                signals['miner_flow'] = 0.2
+        
+        # Balance de tenedores del 1%
+        holder_balance = whale_data.get('balance_1pct_holders', {}).get('data', [])
+        if holder_balance:
+            latest_balance = holder_balance[-1]['v']
+            if latest_balance > 0.8:  # Concentración de tenencia
+                signals['holder_concentration'] = -0.2
+            elif latest_balance < 0.6:  # Distribución saludable
+                signals['holder_concentration'] = 0.2
+        
+        return signals
+    
+    def get_market_regime_indicators(self, asset: str) -> Dict:
+        """Obtener indicadores de régimen de mercado"""
+        endpoints = [
+            "/market/price_usd_ohlc",  # Precios OHLC
+            "/indicators/puell_multiple",  # Múltiple de Puell
+            "/indicators/reserve_risk",  # Riesgo de reserva
+            "/indicators/sopr_adjusted",  # SOPR ajustado
+        ]
+        
+        regime_data = {}
+        for endpoint in endpoints:
+            url = f"{self.base_url}{endpoint}"
+            params = {
+                "a": asset,
+                "api_key": self.api_key,
+                "s": "24h",
+                "c": "USD"
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                regime_data[endpoint.split('/')[-1]] = response.json()
+            except Exception as e:
+                print(f"Error en endpoint {endpoint}: {e}")
+                regime_data[endpoint.split('/')[-1]] = {}
+        
+        return regime_data
+    
+    def calculate_market_regime_signal(self, regime_data: Dict) -> Dict:
+        """Calcular señal de régimen de mercado"""
+        signals = {}
+        
+        # Múltiple de Puell
+        puell = regime_data.get('puell_multiple', {}).get('data', [])
+        if puell:
+            latest_puell = puell[-1]['v']
+            if latest_puell > 5:  # Sobrevalorado
+                signals['puell_multiple'] = -0.3
+            elif latest_puell < 0.5:  # Subvalorado
+                signals['puell_multiple'] = 0.3
+        
+        # Riesgo de reserva
+        reserve_risk = regime_data.get('reserve_risk', {}).get('data', [])
+        if reserve_risk:
+            latest_risk = reserve_risk[-1]['v']
+            if latest_risk > 0.05:  # Alto riesgo
+                signals['reserve_risk'] = -0.2
+            elif latest_risk < 0.01:  # Bajo riesgo
+                signals['reserve_risk'] = 0.2
+        
+        # SOPR ajustado
+        sopr_adjusted = regime_data.get('sopr_adjusted', {}).get('data', [])
+        if sopr_adjusted:
+            latest_sopr = sopr_adjusted[-1]['v']
+            if latest_sopr > 1.1:  # Sobrevalorado
+                signals['sopr_adjusted'] = -0.2
+            elif latest_sopr < 0.9:  # Subvalorado
+                signals['sopr_adjusted'] = 0.2
+        
+        return signals
+    
+    def get_supply_metrics(self, asset: str) -> Dict:
+        """Obtener métricas de oferta"""
+        endpoints = [
+            "/supply/profit_relative",  # Beneficio relativo
+            "/supply/active",  # Oferta activa
+            "/supply/current",  # Oferta actual
+        ]
+        
+        supply_data = {}
+        for endpoint in endpoints:
+            url = f"{self.base_url}{endpoint}"
+            params = {
+                "a": asset,
+                "api_key": self.api_key,
+                "s": "24h",
+                "c": "USD"
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                supply_data[endpoint.split('/')[-1]] = response.json()
+            except Exception as e:
+                print(f"Error en endpoint {endpoint}: {e}")
+                supply_data[endpoint.split('/')[-1]] = {}
+        
+        return supply_data
+    
+    def calculate_supply_signals(self, supply_data: Dict) -> Dict:
+        """Calcular señales basadas en métricas de oferta"""
+        signals = {}
+        
+        # Beneficio relativo
+        profit_relative = supply_data.get('profit_relative', {}).get('data', [])
+        if profit_relative:
+            latest_profit = profit_relative[-1]['v']
+            if latest_profit > 0.8:  # Alta rentabilidad
+                signals['profit_relative'] = 0.2
+            elif latest_profit < 0.2:  # Baja rentabilidad
+                signals['profit_relative'] = -0.2
+        
+        # Oferta activa
+        active_supply = supply_data.get('active', {}).get('data', [])
+        if active_supply:
+            latest_active = active_supply[-1]['v']
+            total_supply = supply_data.get('current', {}).get('data', [{}])[-1]['v']
+            
+            if total_supply > 0:
+                active_ratio = latest_active / total_supply
+                if active_ratio > 0.7:  # Alta actividad
+                    signals['active_supply'] = 0.2
+                elif active_ratio < 0.3:  # Baja actividad
+                    signals['active_supply'] = -0.2
+        
+        return signals
+    
+    def get_transaction_metrics(self, asset: str) -> Dict:
+        """Obtener métricas de transacciones"""
+        endpoints = [
+            "/transactions/count",  # Conteo de transacciones
+            "/transfers/volume_sum",  # Volumen de transferencias
+            "/fees/volume_sum",  # Volumen de fees
+        ]
+        
+        tx_data = {}
+        for endpoint in endpoints:
+            url = f"{self.base_url}{endpoint}"
+            params = {
+                "a": asset,
+                "api_key": self.api_key,
+                "s": "24h",
+                "c": "USD"
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                tx_data[endpoint.split('/')[-1]] = response.json()
+            except Exception as e:
+                print(f"Error en endpoint {endpoint}: {e}")
+                tx_data[endpoint.split('/')[-1]] = {}
+        
+        return tx_data
+    
+    def calculate_transaction_signals(self, tx_data: Dict) -> Dict:
+        """Calcular señales basadas en métricas de transacciones"""
+        signals = {}
+        
+        # Conteo de transacciones
+        tx_count = tx_data.get('count', {}).get('data', [])
+        if tx_count:
+            latest_count = tx_count[-1]['v']
+            # Calcular cambio en conteo
+            if len(tx_count) > 1:
+                count_change = (latest_count / tx_count[-2]['v']) - 1
+                if count_change > 0.5:  # Aumento significativo
+                    signals['tx_count_increase'] = 0.2
+                elif count_change < -0.3:  # Disminución significativa
+                    signals['tx_count_increase'] = -0.2
+        
+        # Volumen de transferencias
+        transfer_volume = tx_data.get('volume_sum', {}).get('data', [])
+        if transfer_volume:
+            latest_volume = transfer_volume[-1]['v']
+            # Calcular cambio en volumen
+            if len(transfer_volume) > 1:
+                volume_change = (latest_volume / transfer_volume[-2]['v']) - 1
+                if volume_change > 0.5:  # Aumento significativo
+                    signals['transfer_volume_increase'] = 0.2
+                elif volume_change < -0.3:  # Disminución significativa
+                    signals['transfer_volume_increase'] = -0.2
+        
+        return signals

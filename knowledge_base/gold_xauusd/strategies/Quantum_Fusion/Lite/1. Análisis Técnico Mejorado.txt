@@ -1,0 +1,71 @@
+import numpy as np
+import pandas as pd
+import talib
+from sklearn.preprocessing import RobustScaler
+
+class QuantumIndicatorsLite:
+    def __init__(self):
+        self.scaler = RobustScaler()
+    
+    def quantum_momentum(self, close, volume, period=14):
+        """Indicador de momento cuántico simplificado"""
+        returns = close.pct_change()
+        vol_weighted = returns * volume.rolling(period).mean()
+        momentum = vol_weighted.ewm(span=period).mean()
+        return self.scaler.fit_transform(momentum.values.reshape(-1, 1)).flatten()
+    
+    def quantum_volatility(self, close, volume, period=20):
+        """Volatilidad cuántica con ajuste de volumen"""
+        returns = close.pct_change()
+        vol = returns.rolling(period).std() * np.sqrt(period)
+        volume_factor = volume.rolling(period).mean() / volume.rolling(period*2).mean()
+        quantum_vol = vol * volume_factor
+        return self.scaler.fit_transform(quantum_vol.values.reshape(-1, 1)).flatten()
+    
+    def quantum_pressure(self, high, low, close, volume):
+        """Presión de mercado cuántica"""
+        buyer_pressure = ((close - low) / (high - low + 1e-10)) * volume
+        seller_pressure = ((high - close) / (high - low + 1e-10)) * volume
+        net_pressure = (buyer_pressure - seller_pressure).rolling(10).mean()
+        return self.scaler.fit_transform(net_pressure.values.reshape(-1, 1)).flatten()
+    
+    def build_features(self, df):
+        """Construir conjunto de características completo"""
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        volume = df['volume']
+        
+        features = pd.DataFrame(index=df.index)
+        
+        # Indicadores técnicos clásicos
+        features['ema9'] = talib.EMA(close, timeperiod=9)
+        features['ema21'] = talib.EMA(close, timeperiod=21)
+        features['ema55'] = talib.EMA(close, timeperiod=55)
+        features['rsi'] = talib.RSI(close, timeperiod=14)
+        features['macd'], features['macdsignal'], features['macdhist'] = talib.MACD(close)
+        features['bb_upper'], features['bb_middle'], features['bb_lower'] = talib.BBANDS(close)
+        features['atr'] = talib.ATR(high, low, close, timeperiod=14)
+        
+        # Indicadores cuánticos
+        features['quantum_momentum'] = self.quantum_momentum(close, volume)
+        features['quantum_volatility'] = self.quantum_volatility(close, volume)
+        features['quantum_pressure'] = self.quantum_pressure(high, low, close, volume)
+        
+        # Características de precio
+        features['returns'] = close.pct_change()
+        features['log_returns'] = np.log(close / close.shift(1))
+        features['volatility'] = features['returns'].rolling(20).std()
+        
+        # Características de volumen
+        features['volume_sma'] = talib.SMA(volume, timeperiod=20)
+        features['volume_ratio'] = volume / features['volume_sma']
+        
+        # Características temporales
+        features['hour'] = df.index.hour
+        features['day_of_week'] = df.index.dayofweek
+        
+        # Eliminar NaNs
+        features = features.dropna()
+        
+        return features

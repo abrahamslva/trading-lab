@@ -1,0 +1,1738 @@
+Quantum Fusion Bear Market Edition
+
+import numpy as np
+import pandas as pd
+import ccxt
+import asyncio
+import websockets
+import json
+import time
+import logging
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.model_selection import train_test_split
+from sklearn.feature_selection import SelectKBest, f_classif
+from scipy.signal import argrelextrema
+import talib
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==================== CONFIGURACIÓN GLOBAL PARA MERCADO BAJISTA ====================
+class BearMarketConfig:
+    # Parámetros generales ajustados para bear market
+    INITIAL_CAPITAL = 50000
+    MAX_POSITIONS = 6  # Reducido para mayor selectividad
+    MAX_LEVERAGE = 2   # Reducido para menor riesgo
+    MIN_CONFIDENCE = 0.85  # Aumentado para mayor precisión
+    RISK_PER_TRADE = 0.01  # Reducido para mejor gestión de riesgo
+    
+    # Pares seleccionados para bear market (mayor volatilidad y oportunidades)
+    PAIRS = [
+        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOT/USDT',
+        'MATIC/USDT', 'LINK/USDT', 'UNI/USDT', 'XRP/USDT', 'LTC/USDT',
+        'ALGO/USDT', 'VET/USDT', 'FIL/USDT', 'TRX/USDT', 'XLM/USDT'
+    ]
+    
+    # Temporalidades óptimas para bear market
+    TIMEFRAMES = ['5m', '15m', '1h', '4h']  # Eliminamos 1m (ruido) y 1d (lentitud)
+    
+    # Asignación de capital reenfocada para bear market
+    STRATEGY_ALLOCATION = {
+        'mean_reversion': 0.35,    # Aumentado - clave en mercados laterales
+        'momentum': 0.15,         # Reducido - menos efectivo en bajista
+        'breakout': 0.10,        # Reducido - breakouts falsos comunes
+        'harmonic': 0.15,        # Mantenido - patrones funcionan en volatilidad
+        'trend': 0.05,           # Reducido drásticamente - tendencias débiles
+        'ml_prediction': 0.20     # Aumentado - ML mejor en condiciones complejas
+    }
+    
+    # Parámetros de riesgo ajustados para bear market
+    STRATEGY_RISK = {
+        'mean_reversion': {'stop_loss': 0.6, 'take_profit': 1.5, 'leverage': 1.5},
+        'momentum': {'stop_loss': 1.0, 'take_profit': 2.0, 'leverage': 2},
+        'breakout': {'stop_loss': 0.8, 'take_profit': 2.5, 'leverage': 2},
+        'harmonic': {'stop_loss': 1.0, 'take_profit': 2.2, 'leverage': 1.5},
+        'trend': {'stop_loss': 1.5, 'take_profit': 3.0, 'leverage': 1},
+        'ml_prediction': {'stop_loss': 0.8, 'take_profit': 2.0, 'leverage': 1.5}
+    }
+    
+    # Pesos de indicadores optimizados para bear market
+    INDICATOR_WEIGHTS = {
+        'mean_reversion': {
+            'bollinger': 0.35, 'rsi': 0.30, 'stochastic': 0.20, 
+            'cci': 0.10, 'williams': 0.05
+        },
+        'momentum': {
+            'rsi': 0.30, 'macd': 0.25, 'stochastic': 0.20, 
+            'volume': 0.15, 'mfi': 0.10
+        },
+        'breakout': {
+            'volume': 0.40, 'bollinger': 0.30, 'atr': 0.20, 
+            'donchian': 0.10
+        },
+        'harmonic': {
+            'fibonacci': 0.40, 'rsi': 0.25, 'macd': 0.15, 
+            'volume': 0.10, 'bollinger': 0.10
+        },
+        'trend': {
+            'adx': 0.30, 'macd': 0.25, 'ema': 0.20, 
+            'parabolic': 0.15, 'volume': 0.10
+        },
+        'ml_prediction': {
+            'ml_score': 0.60, 'technical_score': 0.25, 'volume': 0.15
+        }
+    }
+
+# ==================== SISTEMA DE INDICADORES PARA MERCADO BAJISTA ====================
+class BearMarketIndicators:
+    def __init__(self):
+        self.indicator_cache = {}
+    
+    def calculate_bear_market_indicators(self, df):
+        """Calcular indicadores especializados para bear market"""
+        indicators = {}
+        
+        # Price action básicos
+        indicators['close'] = df['close']
+        indicators['high'] = df['high']
+        indicators['low'] = df['low']
+        indicators['open'] = df['open']
+        indicators['volume'] = df['volume']
+        indicators['returns'] = df['close'].pct_change()
+        
+        # Moving averages (más cortas para bear market)
+        indicators['sma_10'] = talib.SMA(df['close'], timeperiod=10)
+        indicators['sma_20'] = talib.SMA(df['close'], timeperiod=20)
+        indicators['sma_50'] = talib.SMA(df['close'], timeperiod=50)
+        indicators['ema_12'] = talib.EMA(df['close'], timeperiod=12)
+        indicators['ema_26'] = talib.EMA(df['close'], timeperiod=26)
+        indicators['wma_10'] = talib.WMA(df['close'], timeperiod=10)
+        
+        # Momentum indicators (ajustados para bear market)
+        indicators['rsi'] = talib.RSI(df['close'], timeperiod=14)
+        indicators['rsi_7'] = talib.RSI(df['close'], timeperiod=7)
+        indicators['rsi_21'] = talib.RSI(df['close'], timeperiod=21)
+        indicators['macd'], indicators['macd_signal'], indicators['macd_hist'] = talib.MACD(df['close'])
+        indicators['stoch_k'], indicators['stoch_d'] = talib.STOCH(df['high'], df['low'], df['close'])
+        indicators['stoch_rsi'] = talib.STOCHRSI(df['close'], timeperiod=14)
+        indicators['cci'] = talib.CCI(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['williams_r'] = talib.WILLR(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['mfi'] = talib.MFI(df['high'], df['low'], df['close'], df['volume'], timeperiod=14)
+        indicators['roc'] = talib.ROC(df['close'], timeperiod=10)
+        
+        # Volatility indicators (cruciales en bear market)
+        indicators['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['atr_7'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=7)
+        indicators['bb_upper'], indicators['bb_middle'], indicators['bb_lower'] = talib.BBANDS(df['close'], timeperiod=20)
+        indicators['bb_width'] = (indicators['bb_upper'] - indicators['bb_lower']) / indicators['bb_middle']
+        indicators['kc_middle'], indicators['kc_upper'], indicators['kc_lower'] = self.calculate_keltner(df)
+        indicators['donchian_upper'], indicators['donchian_lower'] = talib.MAX(df['high'], 20), talib.MIN(df['low'], 20)
+        
+        # Trend indicators (menor peso en bear market)
+        indicators['adx'] = talib.ADX(df['high'], df['low'], df['close'], timeperiod=14)
+        indicators['aroon_up'], indicators['aroon_down'] = talib.AROON(df['high'], df['low'], timeperiod=14)
+        indicators['aroon_osc'] = indicators['aroon_up'] - indicators['aroon_down']
+        indicators['parabolic_sar'] = talib.SAR(df['high'], df['low'], acceleration=0.02, maximum=0.2)
+        
+        # Volume indicators (más importantes en bear market)
+        indicators['volume_sma'] = talib.SMA(df['volume'], timeperiod=20)
+        indicators['volume_ema'] = talib.EMA(df['volume'], timeperiod=20)
+        indicators['volume_ratio'] = df['volume'] / indicators['volume_sma']
+        indicators['obv'] = talib.OBV(df['close'], df['volume'])
+        indicators['vwap'] = self.calculate_vwap(df)
+        indicators['ad_line'] = talib.AD(df['high'], df['low'], df['close'], df['volume'])
+        indicators['cmf'] = self.calculate_cmf(df)
+        
+        # Bear market specific indicators
+        indicators['fear_greed_index'] = self.calculate_fear_greed_index(indicators)
+        indicators['market_momentum'] = self.calculate_market_momentum(indicators)
+        indicators['support_resistance'] = self.calculate_dynamic_support_resistance(df)
+        indicators['volatility_regime'] = self.calculate_volatility_regime(indicators)
+        indicators['sentiment_indicator'] = self.calculate_sentiment_indicator(indicators)
+        
+        # Pattern indicators (más relevantes en volatilidad)
+        indicators['doji'] = talib.CDLDOJI(df['open'], df['high'], df['low'], df['close'])
+        indicators['hammer'] = talib.CDLHAMMER(df['open'], df['high'], df['low'], df['close'])
+        indicators['engulfing'] = talib.CDLENGULFING(df['open'], df['high'], df['low'], df['close'])
+        indicators['shooting_star'] = talib.CDLSHOOTINGSTAR(df['open'], df['high'], df['low'], df['close'])
+        
+        return indicators
+    
+    def calculate_keltner(self, df, period=20):
+        """Calcular Keltner Channels"""
+        ema = talib.EMA(df['close'], timeperiod=period)
+        atr = talib.ATR(df['high'], df['low'], df['close'], timeperiod=period)
+        upper = ema + (2 * atr)
+        lower = ema - (2 * atr)
+        return ema, upper, lower
+    
+    def calculate_vwap(self, df):
+        """Calcular VWAP"""
+        tp = (df['high'] + df['low'] + df['close']) / 3
+        vwap = (tp * df['volume']).cumsum() / df['volume'].cumsum()
+        return vwap
+    
+    def calculate_cmf(self, df):
+        """Calcular Chaikin Money Flow"""
+        mfv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low']) * df['volume']
+        cmf = mfv.rolling(window=20).sum() / df['volume'].rolling(window=20).sum()
+        return cmf
+    
+    def calculate_fear_greed_index(self, indicators):
+        """Calcular índice de miedo y codicia simplificado"""
+        rsi = indicators['rsi']
+        momentum = indicators['macd_hist']
+        volume_ratio = indicators['volume_ratio']
+        
+        fear_greed = 0
+        fear_greed += (rsi / 100) * 0.3
+        fear_greed += np.clip(momentum / 0.01, -1, 1) * 0.3
+        fear_greed += np.clip(volume_ratio / 2, 0, 1) * 0.4
+        
+        return fear_greed
+    
+    def calculate_market_momentum(self, indicators):
+        """Calcular momentum del mercado"""
+        returns = indicators['returns']
+        momentum_5 = returns.rolling(5).mean()
+        momentum_10 = returns.rolling(10).mean()
+        momentum_20 = returns.rolling(20).mean()
+        
+        return (momentum_5 + momentum_10 + momentum_20) / 3
+    
+    def calculate_dynamic_support_resistance(self, df, window=20):
+        """Calcular soportes y resistencias dinámicos"""
+        highs = df['high'].rolling(window=window, center=True).max()
+        lows = df['low'].rolling(window=window, center=True).min()
+        return lows, highs
+    
+    def calculate_volatility_regime(self, indicators):
+        """Calcular régimen de volatilidad"""
+        atr = indicators['atr']
+        atr_ma = atr.rolling(window=50).mean()
+        volatility_ratio = atr / atr_ma
+        return volatility_ratio
+    
+    def calculate_sentiment_indicator(self, indicators):
+        """Calcular indicador de sentimiento para bear market"""
+        rsi = indicators['rsi']
+        volume_ratio = indicators['volume_ratio']
+        fear_greed = indicators['fear_greed_index']
+        
+        # En bear market, bajo RSI + alto volumen = miedo extremo = oportunidad de compra
+        sentiment = (50 - rsi) / 50 + volume_ratio / 2 + (1 - fear_greed)
+        return sentiment / 3
+
+# ==================== SISTEMA DE PONDERACIÓN PARA MERCADO BAJISTA ====================
+class BearMarketWeightingSystem:
+    def __init__(self):
+        self.market_regime = 'bear'
+        self.volatility_state = 'high'
+        self.sentiment_state = 'fear'
+        self.performance_history = {}
+        self.risk_level = 'high'
+    
+    def update_market_conditions(self, indicators):
+        """Actualizar condiciones del mercado específicas para bear market"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        # Determinar régimen de mercado (bear market específico)
+        fear_greed = latest.get('fear_greed_index', 0.5)
+        market_momentum = latest.get('market_momentum', 0)
+        
+        if fear_greed < 0.3 and market_momentum < -0.02:
+            self.market_regime = 'extreme_fear'
+        elif fear_greed < 0.4 and market_momentum < -0.01:
+            self.market_regime = 'fear'
+        elif fear_greed < 0.6:
+            self.market_regime = 'neutral_bear'
+        else:
+            self.market_regime = 'transition'
+        
+        # Determinar estado de volatilidad
+        volatility_regime = latest.get('volatility_regime', 1)
+        if volatility_regime > 1.8:
+            self.volatility_state = 'extreme_high'
+        elif volatility_regime > 1.3:
+            self.volatility_state = 'high'
+        elif volatility_regime > 0.8:
+            self.volatility_state = 'normal'
+        else:
+            self.volatility_state = 'low'
+        
+        # Determinar sentimiento
+        sentiment = latest.get('sentiment_indicator', 0.5)
+        if sentiment > 0.7:
+            self.sentiment_state = 'extreme_fear'
+        elif sentiment > 0.5:
+            self.sentiment_state = 'fear'
+        elif sentiment > 0.3:
+            self.sentiment_state = 'neutral'
+        else:
+            self.sentiment_state = 'greed'
+        
+        # Determinar nivel de riesgo
+        if self.market_regime in ['extreme_fear', 'fear'] and self.volatility_state in ['extreme_high', 'high']:
+            self.risk_level = 'very_high'
+        elif self.market_regime == 'extreme_fear':
+            self.risk_level = 'high'
+        elif self.volatility_state == 'extreme_high':
+            self.risk_level = 'high'
+        else:
+            self.risk_level = 'moderate'
+    
+    def calculate_indicator_weights(self, strategy, indicators):
+        """Calcular pesos dinámicos específicos para bear market"""
+        base_weights = BearMarketConfig.INDICATOR_WEIGHTS[strategy].copy()
+        
+        # Ajustes extremos para bear market
+        if self.market_regime == 'extreme_fear':
+            if strategy == 'mean_reversion':
+                base_weights['bollinger'] *= 1.4
+                base_weights['rsi'] *= 1.3
+                base_weights['stochastic'] *= 1.2
+            elif strategy == 'momentum':
+                base_weights['rsi'] *= 0.7
+                base_weights['macd'] *= 0.8
+            elif strategy == 'breakout':
+                base_weights['volume'] *= 1.3
+                base_weights['atr'] *= 1.2
+        
+        # Ajustes por volatilidad extrema
+        if self.volatility_state == 'extreme_high':
+            if strategy == 'mean_reversion':
+                base_weights['bollinger'] *= 1.2
+                base_weights['cci'] *= 1.1
+            elif strategy == 'breakout':
+                base_weights['volume'] *= 1.4
+                base_weights['atr'] *= 1.3
+        
+        # Ajustes por sentimiento de miedo
+        if self.sentiment_state in ['fear', 'extreme_fear']:
+            if strategy == 'mean_reversion':
+                base_weights['williams'] *= 1.3
+                base_weights['cci'] *= 1.2
+        
+        # Normalizar pesos
+        total_weight = sum(base_weights.values())
+        normalized_weights = {k: v/total_weight for k, v in base_weights.items()}
+        
+        return normalized_weights
+    
+    def calculate_strategy_score(self, strategy, indicators, signal):
+        """Calcular puntuación con ajustes de bear market"""
+        weights = self.calculate_indicator_weights(strategy, indicators)
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        score = 0.0
+        
+        if strategy == 'mean_reversion':
+            score += self._calculate_bear_market_mean_reversion_score(latest, weights)
+        elif strategy == 'momentum':
+            score += self._calculate_bear_market_momentum_score(latest, weights)
+        elif strategy == 'breakout':
+            score += self._calculate_bear_market_breakout_score(latest, weights)
+        elif strategy == 'harmonic':
+            score += self._calculate_bear_market_harmonic_score(latest, weights, signal)
+        elif strategy == 'trend':
+            score += self._calculate_bear_market_trend_score(latest, weights)
+        elif strategy == 'ml_prediction':
+            score += self._calculate_bear_market_ml_score(latest, weights, signal)
+        
+        # Ajuste por condiciones extremas
+        if self.market_regime == 'extreme_fear' and strategy == 'mean_reversion':
+            score *= 1.2  # Bonus para mean reversion en miedo extremo
+        
+        if self.volatility_state == 'extreme_high' and strategy in ['breakout', 'momentum']:
+            score *= 0.8  # Penalización por alta volatilidad en estrategias de ruptura
+        
+        return min(score, 1.0)
+    
+    def _calculate_bear_market_mean_reversion_score(self, latest, weights):
+        """Calcular puntuación de mean reversion para bear market"""
+        score = 0.0
+        
+        # Bollinger Bands extremos (más importantes en bear market)
+        bb_position = (latest.get('close', 0) - latest.get('bb_lower', 0)) / \
+                     (latest.get('bb_upper', 0) - latest.get('bb_lower', 0))
+        
+        if bb_position < 0.05 or bb_position > 0.95:  # Extremos más amplios
+            score += weights.get('bollinger', 0) * 0.95
+        
+        # RSI extremo (más sensible en bear market)
+        rsi = latest.get('rsi', 50)
+        if rsi < 25 or rsi > 75:  # Zonas extremas más amplias
+            score += weights.get('rsi', 0) * 0.9
+        
+        # Stochastic extremo
+        stoch_k = latest.get('stoch_k', 50)
+        if stoch_k < 15 or stoch_k > 85:
+            score += weights.get('stochastic', 0) * 0.85
+        
+        # CCI extremo
+        cci = latest.get('cci', 0)
+        if cci < -200 or cci > 200:
+            score += weights.get('cci', 0) * 0.8
+        
+        # Williams %R extremo
+        williams = latest.get('williams_r', -50)
+        if williams < -90 or williams > -10:
+            score += weights.get('williams', 0) * 0.75
+        
+        return score
+    
+    def _calculate_bear_market_momentum_score(self, latest, weights):
+        """Calcular puntuación de momentum para bear market (más conservador)"""
+        score = 0.0
+        
+        # RSI en zona neutral (evitar extremos en bear market)
+        rsi = latest.get('rsi', 50)
+        if 35 < rsi < 65:  # Zona más amplia
+            score += weights.get('rsi', 0) * 0.7
+        
+        # MACD con confirmación de volumen
+        if latest.get('macd_hist', 0) != 0 and latest.get('volume_ratio', 1) > 1.2:
+            score += weights.get('macd', 0) * 0.8
+        
+        # Stochastic en zona neutral
+        stoch_k = latest.get('stoch_k', 50)
+        if 20 < stoch_k < 80:
+            score += weights.get('stochastic', 0) * 0.7
+        
+        # Volumen confirmación (más importante en bear market)
+        volume_ratio = latest.get('volume_ratio', 1)
+        if volume_ratio > 1.5:
+            score += weights.get('volume', 0) * 0.9
+        
+        # MFI confirmación
+        mfi = latest.get('mfi', 50)
+        if 30 < mfi < 70:
+            score += weights.get('mfi', 0) * 0.6
+        
+        return score
+    
+    def _calculate_bear_market_breakout_score(self, latest, weights):
+        """Calcular puntuación de breakout para bear market (más estricto)"""
+        score = 0.0
+        
+        # Volumen muy fuerte (crucial en bear market)
+        volume_ratio = latest.get('volume_ratio', 1)
+        if volume_ratio > 2.5:  # Umbral más alto
+            score += weights.get('volume', 0) * min(volume_ratio / 4, 1.0)
+        
+        # Breakout de Bollinger con confirmación
+        close = latest.get('close', 0)
+        bb_upper = latest.get('bb_upper', 0)
+        bb_lower = latest.get('bb_lower', 0)
+        
+        if (close > bb_upper or close < bb_lower) and volume_ratio > 2.0:
+            score += weights.get('bollinger', 0) * 0.8
+        
+        # ATR alto (volatilidad confirmada)
+        atr = latest.get('atr', 0)
+        if atr > latest.get('atr_7', 0) * 1.3:
+            score += weights.get('atr', 0) * 0.7
+        
+        # Breakout de Donchian
+        donchian_upper = latest.get('donchian_upper', 0)
+        donchian_lower = latest.get('donchian_lower', 0)
+        
+        if (close > donchian_upper or close < donchian_lower) and volume_ratio > 2.0:
+            score += weights.get('donchian', 0) * 0.6
+        
+        return score
+    
+    def _calculate_bear_market_harmonic_score(self, latest, weights, signal):
+        """Calcular puntuación de patrones armónicos para bear market"""
+        score = signal.get('confidence', 0) * weights.get('fibonacci', 0)
+        
+        # Confirmaciones más estrictas en bear market
+        if 20 < latest.get('rsi', 50) < 80:  # Zona más amplia
+            score += weights.get('rsi', 0) * 0.7
+        
+        if latest.get('macd_hist', 0) != 0:  # Cualquier señal MACD
+            score += weights.get('macd', 0) * 0.6
+        
+        if latest.get('volume_ratio', 1) > 1.3:  # Volumen moderado
+            score += weights.get('volume', 0) * 0.7
+        
+        # Ajuste por sentimiento de miedo
+        if self.sentiment_state in ['fear', 'extreme_fear']:
+            score *= 1.1
+        
+        return score
+    
+    def _calculate_bear_market_trend_score(self, latest, weights):
+        """Calcular puntuación de tendencia para bear market (muy conservador)"""
+        score = 0.0
+        
+        # Solo considerar tendencias muy fuertes
+        if latest.get('adx', 0) > 35:  # Umbral más alto
+            score += weights.get('adx', 0) * min(latest['adx'] / 50, 1.0)
+        
+        # MACD con fuerte confirmación
+        if abs(latest.get('macd_hist', 0)) > 0.02:
+            score += weights.get('macd', 0) * 0.7
+        
+        # EMA con divergencia clara
+        ema_12 = latest.get('ema_12', 0)
+        ema_26 = latest.get('ema_26', 0)
+        if abs(ema_12 - ema_26) / ema_26 > 0.02:
+            score += weights.get('ema', 0) * 0.6
+        
+        # SAR confirmación
+        sar = latest.get('parabolic_sar', 0)
+        close = latest.get('close', 0)
+        if abs(sar - close) / close > 0.02:
+            score += weights.get('parabolic', 0) * 0.5
+        
+        # Volumen confirmación
+        if latest.get('volume_ratio', 1) > 1.5:
+            score += weights.get('volume', 0) * 0.6
+        
+        return score * 0.7  # Reducción general para tendencia en bear market
+    
+    def _calculate_bear_market_ml_score(self, latest, weights, signal):
+        """Calcular puntuación de ML para bear market"""
+        score = 0.0
+        
+        # Puntuación del modelo ML (más exigente)
+        ml_confidence = signal.get('confidence', 0)
+        if ml_confidence > 0.8:  # Umbral más alto
+            score += weights.get('ml_score', 0) * ml_confidence
+        
+        # Confirmación técnica más estricta
+        tech_score = self._calculate_bear_market_technical_confirmation(latest)
+        score += weights.get('technical_score', 0) * tech_score
+        
+        # Confirmación de volumen (más importante)
+        volume_ratio = latest.get('volume_ratio', 1)
+        if volume_ratio > 1.5:
+            score += weights.get('volume', 0) * min(volume_ratio / 2.5, 1.0)
+        
+        # Ajuste por condiciones de mercado
+        if self.market_regime == 'extreme_fear':
+            score *= 1.15  # Bonus en miedo extremo
+        
+        return score
+    
+    def _calculate_bear_market_technical_confirmation(self, latest):
+        """Calcular confirmación técnica más estricta para bear market"""
+        confirmations = 0
+        total_checks = 0
+        
+        # RSI en zona neutral
+        rsi = latest.get('rsi', 50)
+        if 30 < rsi < 70:
+            confirmations += 1
+        total_checks += 1
+        
+        # MACD con señal clara
+        if abs(latest.get('macd_hist', 0)) > 0.01:
+            confirmations += 1
+        total_checks += 1
+        
+        # Fuerza de tendencia moderada
+        if latest.get('adx', 0) > 20:
+            confirmations += 1
+        total_checks += 1
+        
+        # Volumen adecuado
+        if latest.get('volume_ratio', 1) > 1.2:
+            confirmations += 1
+        total_checks += 1
+        
+        # Volatilidad controlada
+        volatility_regime = latest.get('volatility_regime', 1)
+        if volatility_regime < 2.0:
+            confirmations += 1
+        total_checks += 1
+        
+        return confirmations / total_checks if total_checks > 0 else 0
+
+# ==================== SISTEMA DE MACHINE LEARNING PARA MERCADO BAJISTA ====================
+class BearMarketMLPredictor:
+    def __init__(self):
+        self.models = {
+            'rf': RandomForestClassifier(n_estimators=400, max_depth=12, min_samples_split=8, random_state=42),
+            'gb': GradientBoostingClassifier(n_estimators=400, max_depth=6, learning_rate=0.03, random_state=42),
+            'et': ExtraTreesClassifier(n_estimators=400, max_depth=12, min_samples_split=8, random_state=42),
+            'mlp': MLPClassifier(hidden_layer_sizes=(150, 75, 25), max_iter=1500, alpha=0.0015, random_state=42)
+        }
+        self.scalers = {}
+        self.feature_selector = {}
+        self.is_trained = False
+        self.feature_names = []
+        self.model_weights = {'rf': 0.35, 'gb': 0.35, 'et': 0.20, 'mlp': 0.10}
+        
+    def prepare_bear_market_features(self, df, indicators):
+        """Preparar características específicas para bear market"""
+        features = pd.DataFrame()
+        
+        # Características de precio (enfocadas en volatilidad)
+        features['price_change'] = df['close'].pct_change()
+        features['price_change_3'] = df['close'].pct_change(3)
+        features['price_change_5'] = df['close'].pct_change(5)
+        features['log_return'] = np.log(df['close'] / df['close'].shift(1))
+        features['volatility_3'] = features['price_change'].rolling(3).std()
+        features['volatility_5'] = features['price_change'].rolling(5).std()
+        features['volatility_10'] = features['price_change'].rolling(10).std()
+        features['max_drawdown_5'] = (df['close'].rolling(5).max() - df['close']) / df['close'].rolling(5).max()
+        features['max_drawdown_10'] = (df['close'].rolling(10).max() - df['close']) / df['close'].rolling(10).max()
+        
+        # Características de media móvil (más cortas)
+        features['sma_ratio_10_20'] = indicators['sma_10'] / indicators['sma_20']
+        features['sma_ratio_5_10'] = indicators['sma_10'] / indicators['sma_20']
+        features['ema_ratio_12_26'] = indicators['ema_12'] / indicators['ema_26']
+        features['price_vs_sma10'] = (df['close'] - indicators['sma_10']) / indicators['sma_10']
+        features['price_vs_sma20'] = (df['close'] - indicators['sma_20']) / indicators['sma_20']
+        features['price_distance_sma'] = abs(df['close'] - indicators['sma_20']) / indicators['sma_20']
+        
+        # Características de momentum (ajustadas para bear market)
+        features['rsi'] = indicators['rsi']
+        features['rsi_7'] = indicators['rsi_7']
+        features['rsi_21'] = indicators['rsi_21']
+        features['rsi_divergence'] = features['rsi'] - features['rsi'].rolling(7).mean()
+        features['rsi_extreme'] = ((features['rsi'] < 30) | (features['rsi'] > 70)).astype(int)
+        features['macd'] = indicators['macd']
+        features['macd_signal'] = indicators['macd_signal']
+        features['macd_hist'] = indicators['macd_hist']
+        features['macd_divergence'] = features['macd_hist'] - features['macd_hist'].rolling(7).mean()
+        features['stoch_k'] = indicators['stoch_k']
+        features['stoch_d'] = indicators['stoch_d']
+        features['stoch_rsi'] = indicators['stoch_rsi']
+        features['cci'] = indicators['cci']
+        features['williams_r'] = indicators['williams_r']
+        features['mfi'] = indicators['mfi']
+        features['roc'] = indicators['roc']
+        
+        # Características de volatilidad (más importantes en bear market)
+        features['atr'] = indicators['atr']
+        features['atr_ratio'] = indicators['atr'] / df['close']
+        features['atr_change'] = features['atr'].pct_change()
+        features['bb_position'] = (df['close'] - indicators['bb_lower']) / (indicators['bb_upper'] - indicators['bb_lower'])
+        features['bb_width'] = indicators['bb_width']
+        features['bb_squeeze'] = features['bb_width'] < features['bb_width'].rolling(30).mean() * 0.7
+        features['bb_extreme'] = ((features['bb_position'] < 0.1) | (features['bb_position'] > 0.9)).astype(int)
+        features['kc_position'] = (df['close'] - indicators['kc_lower']) / (indicators['kc_upper'] - indicators['kc_lower'])
+        features['volatility_regime'] = indicators['volatility_regime']
+        
+        # Características de volumen (más importantes en bear market)
+        features['volume_ratio'] = indicators['volume_ratio']
+        features['volume_change'] = df['volume'].pct_change()
+        features['volume_sma_ratio'] = indicators['volume'] / indicators['volume_sma']
+        features['volume_ema_ratio'] = indicators['volume'] / indicators['volume_ema']
+        features['volume_spike'] = (features['volume_ratio'] > 2.0).astype(int)
+        features['obv'] = indicators['obv']
+        features['obv_change'] = features['obv'].pct_change()
+        features['vwap'] = indicators['vwap']
+        features['price_vs_vwap'] = (df['close'] - features['vwap']) / features['vwap']
+        features['ad_line'] = indicators['ad_line']
+        features['cmf'] = indicators['cmf']
+        
+        # Características de tendencia (reducidas en bear market)
+        features['adx'] = indicators['adx']
+        features['adx_strong'] = (features['adx'] > 30).astype(int)
+        features['aroon_up'] = indicators['aroon_up']
+        features['aroon_down'] = indicators['aroon_down']
+        features['aroon_osc'] = indicators['aroon_osc']
+        features['trend_strength'] = indicators['market_momentum']
+        features['parabolic_sar'] = indicators['parabolic_sar']
+        features['price_vs_sar'] = (df['close'] - features['parabolic_sar']) / df['close']
+        
+        # Características de patrones (más relevantes en volatilidad)
+        features['doji'] = indicators['doji']
+        features['hammer'] = indicators['hammer']
+        features['engulfing'] = indicators['engulfing']
+        features['shooting_star'] = indicators['shooting_star']
+        features['reversal_pattern'] = (features['hammer'] > 0) | (features['engulfing'] != 0)
+        
+        # Características de sentimiento (cruciales en bear market)
+        features['fear_greed_index'] = indicators['fear_greed_index']
+        features['sentiment_indicator'] = indicators['sentiment_indicator']
+        features['extreme_fear'] = (features['fear_greed_index'] < 0.3).astype(int)
+        features['extreme_greed'] = (features['fear_greed_index'] > 0.7).astype(int)
+        
+        # Características de estructura de mercado
+        features['support_distance'] = (df['close'] - indicators['support_resistance'][0]) / df['close']
+        features['resistance_distance'] = (indicators['support_resistance'][1] - df['close']) / df['close']
+        features['near_support'] = (features['support_distance'] < 0.02).astype(int)
+        features['near_resistance'] = (features['resistance_distance'] < 0.02).astype(int)
+        
+        # Características temporales (ajustadas para bear market)
+        features['hour'] = df.index.hour
+        features['day_of_week'] = df.index.dayofweek
+        features['is_weekend'] = (df.index.dayofweek >= 5).astype(int)
+        features['month'] = df.index.month
+        features['quarter'] = df.index.quarter
+        
+        # Características de interacción (específicas para bear market)
+        features['rsi_volume'] = features['rsi'] * features['volume_ratio']
+        features['macd_volume'] = features['macd_hist'] * features['volume_ratio']
+        features['adx_volume'] = features['adx'] * features['volume_ratio']
+        features['volatility_trend'] = features['volatility_5'] * features['trend_strength']
+        features['fear_volume'] = features['fear_greed_index'] * features['volume_ratio']
+        features['sentiment_volatility'] = features['sentiment_indicator'] * features['volatility_regime']
+        
+        # Eliminar NaN
+        features = features.dropna()
+        
+        self.feature_names = features.columns.tolist()
+        return features
+    
+    def train_bear_market_models(self, historical_data):
+        """Entrenar modelos especializados para bear market"""
+        print("Entrenando modelos especializados para bear market...")
+        
+        all_features = []
+        all_directions = []
+        all_magnitudes = []
+        
+        for pair_data in historical_data:
+            if len(pair_data) < 200:
+                continue
+                
+            indicators = BearMarketIndicators().calculate_bear_market_indicators(pair_data)
+            features = self.prepare_bear_market_features(pair_data, indicators)
+            directions, magnitudes = self.prepare_targets(pair_data)
+            
+            # Alinear características y targets
+            min_length = min(len(features), len(directions), len(magnitudes))
+            if min_length > 100:
+                all_features.append(features.iloc[:min_length])
+                all_directions.append(directions.iloc[:min_length])
+                all_magnitudes.append(magnitudes.iloc[:min_length])
+        
+        if not all_features:
+            print("No hay suficientes datos para entrenar")
+            return
+        
+        # Combinar todos los datos
+        X = pd.concat(all_features, ignore_index=True)
+        y_direction = pd.concat(all_directions, ignore_index=True)
+        y_magnitude = pd.concat(all_magnitudes, ignore_index=True)
+        
+        # Dividir datos con mayor énfasis en datos recientes (bear market)
+        X_train, X_test, y_train, y_test = train_test_split(X, y_direction, test_size=0.15, random_state=42, shuffle=False)
+        
+        # Selección de características más agresiva para bear market
+        print("Seleccionando características para bear market...")
+        selector = SelectKBest(score_func=f_classif, k=40)  # Menos características, más relevantes
+        X_train_selected = selector.fit_transform(X_train, y_train)
+        X_test_selected = selector.transform(X_test)
+        
+        # Entrenar cada modelo con parámetros optimizados para bear market
+        for model_name, model in self.models.items():
+            print(f"Entrenando modelo {model_name} para bear market...")
+            
+            # Escalar características
+            if model_name == 'mlp':
+                scaler = RobustScaler()  # Mejor para outliers en bear market
+                X_train_scaled = scaler.fit_transform(X_train_selected)
+                X_test_scaled = scaler.transform(X_test_selected)
+            else:
+                scaler = StandardScaler()
+                X_train_scaled = scaler.fit_transform(X_train_selected)
+                X_test_scaled = scaler.transform(X_test_selected)
+            
+            # Entrenar modelo
+            model.fit(X_train_scaled, y_train)
+            
+            # Guardar scaler y selector
+            self.scalers[model_name] = scaler
+            self.feature_selector[model_name] = selector
+            
+            # Evaluar
+            accuracy = model.score(X_test_scaled, y_test)
+            print(f"Modelo {model_name} - Accuracy: {accuracy:.3f}")
+        
+        self.is_trained = True
+        print("Entrenamiento para bear market completado")
+    
+    def predict_bear_market(self, df, indicators):
+        """Realizar predicción especializada para bear market"""
+        if not self.is_trained:
+            return None
+        
+        features = self.prepare_bear_market_features(df, indicators)
+        if len(features) == 0:
+            return None
+        
+        # Obtener última fila de características
+        latest_features = features.iloc[-1:].values
+        
+        # Predicciones de cada modelo
+        predictions = {}
+        for model_name, model in self.models.items():
+            if model_name in self.scalers:
+                selector = self.feature_selector[model_name]
+                scaler = self.scalers[model_name]
+                
+                # Seleccionar y escalar características
+                features_selected = selector.transform(latest_features)
+                features_scaled = scaler.transform(features_selected)
+                
+                # Obtener predicción
+                pred_proba = model.predict_proba(features_scaled)[0]
+                predictions[model_name] = pred_proba
+        
+        # Ensemble ponderado para bear market
+        ensemble_pred = np.zeros(2)
+        for model_name, pred in predictions.items():
+            weight = self.model_weights[model_name]
+            ensemble_pred += pred * weight
+        
+        # Calcular métricas adicionales específicas para bear market
+        direction = 1 if ensemble_pred[1] > 0.7 else 0  # Umbral más alto
+        confidence = max(ensemble_pred)
+        uncertainty = 1 - abs(ensemble_pred[1] - ensemble_pred[0])
+        
+        # Ajuste por condiciones de mercado
+        fear_greed = indicators['fear_greed_index'].iloc[-1]
+        if fear_greed < 0.3:  # Miedo extremo
+            confidence *= 1.1  # Aumentar confianza en predicciones de compra
+        
+        return {
+            'direction': direction,
+            'confidence': confidence,
+            'uncertainty': uncertainty,
+            'prediction': 'buy' if direction == 1 else 'sell' if confidence > 0.8 else 'hold',
+            'ensemble_score': ensemble_pred,
+            'market_condition': fear_greed
+        }
+
+# ==================== SISTEMA DE TRADING PARA MERCADO BAJISTA ====================
+class QuantumFusionBearMarketEdition:
+    def __init__(self):
+        self.config = BearMarketConfig()
+        self.data_fetcher = DataFetcher()
+        self.harmonic_detector = HarmonicPatternDetector()
+        self.ml_predictor = BearMarketMLPredictor()
+        self.weighting_system = BearMarketWeightingSystem()
+        self.bear_indicators = BearMarketIndicators()
+        
+        # Estado del sistema
+        self.positions = {}
+        self.performance_history = []
+        self.capital = self.config.INITIAL_CAPITAL
+        self.peak_capital = self.config.INITIAL_CAPITAL
+        
+        # Métricas mejoradas para bear market
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.total_pnl = 0
+        self.strategy_performance = {}
+        self.risk_metrics = {
+            'max_drawdown': 0,
+            'current_drawdown': 0,
+            'var_95': 0,
+            'sharpe_ratio': 0
+        }
+        
+        # Configurar logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger('QuantumFusionBearMarket')
+        
+    async def initialize(self):
+        """Inicializar el sistema para bear market"""
+        print("Inicializando Quantum Fusion Bear Market Edition...")
+        
+        # Obtener datos históricos para entrenamiento
+        print("Obteniendo datos históricos...")
+        historical_data = await self.fetch_all_historical_data()
+        
+        # Entrenar modelos de ML especializados
+        if historical_data:
+            self.ml_predictor.train_bear_market_models(historical_data)
+        
+        print("Sistema para bear market inicializado correctamente")
+    
+    async def fetch_all_historical_data(self, days=150):
+        """Obtener datos históricos incluyendo periodos de bear market"""
+        historical_data = []
+        
+        for pair in self.config.PAIRS:
+            for timeframe in self.config.TIMEFRAMES:
+                print(f"Obteniendo datos para {pair} {timeframe}...")
+                df = await self.data_fetcher.fetch_historical_data(pair, timeframe, days*24)
+                if df is not None:
+                    historical_data.append(df)
+                await asyncio.sleep(0.05)
+        
+        return historical_data
+    
+    async def analyze_pair(self, pair):
+        """Analizar un par específico con enfoque en bear market"""
+        analysis_results = {}
+        
+        for timeframe in self.config.TIMEFRAMES:
+            # Obtener datos
+            df = await self.data_fetcher.fetch_historical_data(pair, timeframe, 400)
+            if df is None:
+                continue
+            
+            # Calcular indicadores especializados para bear market
+            indicators = self.bear_indicators.calculate_bear_market_indicators(df)
+            
+            # Actualizar condiciones del mercado
+            self.weighting_system.update_market_conditions(indicators)
+            
+            # Detectar patrones armónicos
+            harmonic_signals = []
+            for pattern in self.harmonic_detector.patterns:
+                pattern_result = self.harmonic_detector.detect_harmonic_pattern(df, pattern)
+                if pattern_result:
+                    harmonic_signals.append(pattern_result)
+            
+            # Generar señales especializadas para bear market
+            signals = self.generate_bear_market_trading_signals(df, indicators, harmonic_signals)
+            
+            # Predicción de ML especializada
+            ml_prediction = self.ml_predictor.predict_bear_market(df, indicators)
+            
+            analysis_results[timeframe] = {
+                'indicators': indicators,
+                'harmonic_signals': harmonic_signals,
+                'signals': signals,
+                'ml_prediction': ml_prediction,
+                'market_state': self.assess_bear_market_state(indicators),
+                'regime': self.weighting_system.market_regime,
+                'volatility': self.weighting_system.volatility_state,
+                'sentiment': self.weighting_system.sentiment_state,
+                'risk_level': self.weighting_system.risk_level
+            }
+        
+        return analysis_results
+    
+    def generate_bear_market_trading_signals(self, df, indicators, harmonic_signals):
+        """Generar señales especializadas para bear market"""
+        signals = {}
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        # 1. Estrategia de Mean Reversion (prioridad en bear market)
+        mr_signal = self.generate_bear_market_mean_reversion_signal(latest, indicators)
+        if mr_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('mean_reversion', indicators, mr_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                mr_signal['strategy'] = 'mean_reversion'
+                mr_signal['strategy_score'] = strategy_score
+                signals['mean_reversion'] = mr_signal
+        
+        # 2. Estrategia de ML Prediction (segunda prioridad)
+        ml_signal = self.generate_bear_market_ml_signal(latest, indicators)
+        if ml_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('ml_prediction', indicators, ml_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                ml_signal['strategy'] = 'ml_prediction'
+                ml_signal['strategy_score'] = strategy_score
+                signals['ml_prediction'] = ml_signal
+        
+        # 3. Estrategia de Momentum (más conservadora)
+        momentum_signal = self.generate_bear_market_momentum_signal(latest, indicators)
+        if momentum_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('momentum', indicators, momentum_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                momentum_signal['strategy'] = 'momentum'
+                momentum_signal['strategy_score'] = strategy_score
+                signals['momentum'] = momentum_signal
+        
+        # 4. Estrategia de Breakout (muy selectiva)
+        breakout_signal = self.generate_bear_market_breakout_signal(latest, indicators)
+        if breakout_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('breakout', indicators, breakout_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                breakout_signal['strategy'] = 'breakout'
+                breakout_signal['strategy_score'] = strategy_score
+                signals['breakout'] = breakout_signal
+        
+        # 5. Estrategia de Patrones Armónicos
+        if harmonic_signals:
+            for signal in harmonic_signals:
+                strategy_score = self.weighting_system.calculate_strategy_score('harmonic', indicators, signal)
+                if strategy_score >= self.config.MIN_CONFIDENCE:
+                    enhanced_signal = {
+                        'type': signal['type'],
+                        'strategy': 'harmonic',
+                        'entry_price': signal['entry_price'],
+                        'stop_loss': signal['stop_loss'],
+                        'take_profit': signal['take_profit'],
+                        'confidence': strategy_score,
+                        'strategy_score': strategy_score
+                    }
+                    signals['harmonic'] = enhanced_signal
+        
+        # 6. Estrategia de Trend (muy limitada en bear market)
+        trend_signal = self.generate_bear_market_trend_signal(latest, indicators)
+        if trend_signal:
+            strategy_score = self.weighting_system.calculate_strategy_score('trend', indicators, trend_signal)
+            if strategy_score >= self.config.MIN_CONFIDENCE:
+                trend_signal['strategy'] = 'trend'
+                trend_signal['strategy_score'] = strategy_score
+                signals['trend'] = trend_signal
+        
+        return signals
+    
+    def generate_bear_market_mean_reversion_signal(self, latest, indicators):
+        """Generar señal de mean reversion optimizada para bear market"""
+        # Condiciones principales para sobreventa extrema
+        extreme_oversold = (
+            latest['close'] < latest['bb_lower'] * 0.98 and  # Por debajo de BB
+            latest['rsi'] < 25 and                     # RSI extremadamente bajo
+            latest['stoch_k'] < 15 and                  # Stochastic extremo
+            latest['cci'] < -200 and                   # CCI extremo
+            latest['williams_r'] < -90 and              # Williams %R extremo
+            latest['sentiment_indicator'] > 0.6        # Sentimiento de miedo extremo
+        )
+        
+        # Confirmaciones adicionales
+        volume_confirmation = latest['volume_ratio'] > 0.8
+        support_confirmation = latest['close'] < latest['support_resistance'][0] * 1.01
+        fear_confirmation = latest['fear_greed_index'] < 0.3
+        
+        confirmations = sum([volume_confirmation, support_confirmation, fear_confirmation])
+        
+        if extreme_oversold and confirmations >= 2:
+            return {
+                'type': 'bear_market_mr_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] - latest['atr'] * 0.6,  # Stop loss muy ajustado
+                'take_profit': latest['bb_middle'],  # Target conservador
+                'confidence': 0.85 + (confirmations * 0.05)
+            }
+        
+        # Condiciones para sobrecompra extrema
+        extreme_overbought = (
+            latest['close'] > latest['bb_upper'] * 1.02 and
+            latest['rsi'] > 75 and
+            latest['stoch_k'] > 85 and
+            latest['cci'] > 200 and
+            latest['williams_r'] > -10 and
+            latest['sentiment_indicator'] < 0.2
+        )
+        
+        volume_confirmation_short = latest['volume_ratio'] > 0.8
+        resistance_confirmation = latest['close'] > latest['support_resistance'][1] * 0.99
+        greed_confirmation = latest['fear_greed_index'] > 0.7
+        
+        confirmations_short = sum([volume_confirmation_short, resistance_confirmation, greed_confirmation])
+        
+        if extreme_overbought and confirmations_short >= 2:
+            return {
+                'type': 'bear_market_mr_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] + latest['atr'] * 0.6,
+                'take_profit': latest['bb_middle'],
+                'confidence': 0.85 + (confirmations_short * 0.05)
+            }
+        
+        return None
+    
+    def generate_bear_market_momentum_signal(self, latest, indicators):
+        """Generar señal de momentum conservadora para bear market"""
+        # Condiciones principales para momentum alcista (muy estrictas)
+        momentum_condition = (
+            latest['macd_hist'] > 0.01 and           # MACD positivo significativo
+            latest['rsi'] > 40 and latest['rsi'] < 60 and  # RSI en zona neutral
+            latest['stoch_k'] > 30 and latest['stoch_k'] < 70 and  # Stochastic neutral
+            latest['volume_ratio'] > 1.8 and          # Volumen fuerte
+            latest['adx'] > 25                         # Tendencia moderada
+        )
+        
+        # Confirmaciones adicionales
+        mfi_confirmation = 40 < latest['mfi'] < 60
+        trend_confirmation = latest['market_momentum'] > -0.01
+        pattern_confirmation = latest['hammer'] > 0 or latest['engulfing'] > 0
+        
+        confirmations = sum([mfi_confirmation, trend_confirmation, pattern_confirmation])
+        
+        if momentum_condition and confirmations >= 2:
+            return {
+                'type': 'bear_market_momentum_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] - latest['atr'] * 1.0,
+                'take_profit': latest['close'] + latest['atr'] * 2.0,
+                'confidence': 0.8 + (confirmations * 0.05)
+            }
+        
+        # Condiciones para momentum bajista
+        momentum_condition_short = (
+            latest['macd_hist'] < -0.01 and
+            latest['rsi'] > 40 and latest['rsi'] < 60 and
+            latest['stoch_k'] > 30 and latest['stoch_k'] < 70 and
+            latest['volume_ratio'] > 1.8 and
+            latest['adx'] > 25
+        )
+        
+        mfi_confirmation_short = 40 < latest['mfi'] < 60
+        trend_confirmation_short = latest['market_momentum'] < 0.01
+        pattern_confirmation_short = latest['shooting_star'] > 0 or latest['engulfing'] < 0
+        
+        confirmations_short = sum([mfi_confirmation_short, trend_confirmation_short, pattern_confirmation_short])
+        
+        if momentum_condition_short and confirmations_short >= 2:
+            return {
+                'type': 'bear_market_momentum_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['close'] + latest['atr'] * 1.0,
+                'take_profit': latest['close'] - latest['atr'] * 2.0,
+                'confidence': 0.8 + (confirmations_short * 0.05)
+            }
+        
+        return None
+    
+    def generate_bear_market_breakout_signal(self, latest, indicators):
+        """Generar señal de breakout muy selectiva para bear market"""
+        # Condiciones principales para breakout alcista
+        breakout_condition = (
+            latest['close'] > latest['bb_upper'] * 1.01 and    # Rompimiento claro
+            latest['volume_ratio'] > 3.0 and                # Volumen muy fuerte
+            latest['adx'] > 35 and                         # Tendencia fuerte
+            latest['volatility_regime'] > 1.5              # Alta volatilidad
+        )
+        
+        # Confirmaciones adicionales
+        atr_confirmation = latest['atr'] > latest['atr_7'] * 1.4
+        donchian_confirmation = latest['close'] > latest['donchian_upper']
+        trend_confirmation = latest['market_momentum'] > 0.02
+        
+        confirmations = sum([atr_confirmation, donchian_confirmation, trend_confirmation])
+        
+        if breakout_condition and confirmations >= 2:
+            return {
+                'type': 'bear_market_breakout_long',
+                'entry_price': latest['close'],
+                'stop_loss': latest['bb_upper'],
+                'take_profit': latest['close'] + (latest['bb_upper'] - latest['bb_lower']) * 0.4,
+                'confidence': 0.9 + (confirmations * 0.03)
+            }
+        
+        # Condiciones para breakout bajista
+        breakout_condition_short = (
+            latest['close'] < latest['bb_lower'] * 0.99 and
+            latest['volume_ratio'] > 3.0 and
+            latest['adx'] > 35 and
+            latest['volatility_regime'] > 1.5
+        )
+        
+        atr_confirmation_short = latest['atr'] > latest['atr_7'] * 1.4
+        donchian_confirmation_short = latest['close'] < latest['donchian_lower']
+        trend_confirmation_short = latest['market_momentum'] < -0.02
+        
+        confirmations_short = sum([atr_confirmation_short, donchian_confirmation_short, trend_confirmation_short])
+        
+        if breakout_condition_short and confirmations_short >= 2:
+            return {
+                'type': 'bear_market_breakout_short',
+                'entry_price': latest['close'],
+                'stop_loss': latest['bb_lower'],
+                'take_profit': latest['close'] - (latest['bb_upper'] - latest['bb_lower']) * 0.4,
+                'confidence': 0.9 + (confirmations_short * 0.03)
+            }
+        
+        return None
+    
+    def generate_bear_market_ml_signal(self, latest, indicators, ml_prediction=None):
+        """Generar señal basada en ML especializada para bear market"""
+        if ml_prediction is None:
+            return None
+        
+        # Criterios muy estrictos para bear market
+        if (ml_prediction['confidence'] > 0.85 and 
+            ml_prediction['uncertainty'] < 0.25 and
+            ml_prediction['prediction'] != 'hold' and
+            ml_prediction.get('market_condition', 0.5) < 0.4):  # Solo en condiciones de miedo
+            
+            # Calcular niveles de stop loss y take profit más conservadores
+            atr = latest['atr']
+            
+            if ml_prediction['prediction'] == 'buy':
+                return {
+                    'type': 'bear_market_ml_long',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] - atr * 0.8,  # Stop loss ajustado
+                    'take_profit': latest['close'] + atr * 2.0,  # Take profit conservador
+                    'confidence': ml_prediction['confidence'],
+                    'ml_data': ml_prediction
+                }
+            else:
+                return {
+                    'type': 'bear_market_ml_short',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] + atr * 0.8,
+                    'take_profit': latest['close'] - atr * 2.0,
+                    'confidence': ml_prediction['confidence'],
+                    'ml_data': ml_prediction
+                }
+        
+        return None
+    
+    def generate_bear_market_trend_signal(self, latest, indicators):
+        """Generar señal de tendencia muy limitada para bear market"""
+        # Solo considerar tendencias extremadamente fuertes
+        strong_trend = (
+            latest['adx'] > 40 and                         # ADX muy fuerte
+            abs(latest['macd_hist']) > 0.02 and            # MACD significativo
+            abs(latest['ema_12'] - latest['ema_26']) / latest['ema_26'] > 0.03 and  # EMA divergence clara
+            latest['volume_ratio'] > 1.5                   # Volumen confirmación
+        )
+        
+        if strong_trend:
+            if latest['macd_hist'] > 0.02:
+                return {
+                    'type': 'bear_market_trend_long',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] - latest['atr'] * 1.5,
+                    'take_profit': latest['close'] + latest['atr'] * 3.0,
+                    'confidence': 0.75
+                }
+            else:
+                return {
+                    'type': 'bear_market_trend_short',
+                    'entry_price': latest['close'],
+                    'stop_loss': latest['close'] + latest['atr'] * 1.5,
+                    'take_profit': latest['close'] - latest['atr'] * 3.0,
+                    'confidence': 0.75
+                }
+        
+        return None
+    
+    def assess_bear_market_state(self, indicators):
+        """Evaluar estado del mercado con enfoque en bear market"""
+        latest = {k: v.iloc[-1] if isinstance(v, pd.Series) else v for k, v in indicators.items()}
+        
+        volatility = latest['atr'] / latest['close']
+        trend_strength = abs(latest['market_momentum'])
+        volume_activity = latest['volume_ratio']
+        fear_greed = latest['fear_greed_index']
+        
+        # Clasificación específica para bear market
+        if fear_greed < 0.2 and volatility > 0.04:
+            return 'extreme_fear_high_volatility'
+        elif fear_greed < 0.3 and volatility > 0.03:
+            return 'high_fear_moderate_volatility'
+        elif fear_greed < 0.4:
+            return 'moderate_fear'
+        elif volatility > 0.05:
+            return 'high_volatility_choppy'
+        elif trend_strength < 0.005:
+            return 'low_momentum_consolidation'
+        else:
+            return 'transition'
+    
+    async def execute_bear_market_cycle(self):
+        """Ejecutar ciclo especializado para bear market"""
+        print("Iniciando ciclo de trading para bear market...")
+        
+        # Analizar todos los pares
+        all_signals = []
+        
+        for pair in self.config.PAIRS:
+            analysis = await self.analyze_pair(pair)
+            
+            # Procesar señales de todas las temporalidades
+            for timeframe, data in analysis.items():
+                signals = data['signals']
+                ml_prediction = data['ml_prediction']
+                market_state = data['market_state']
+                regime = data['regime']
+                volatility = data['volatility']
+                sentiment = data['sentiment']
+                risk_level = data['risk_level']
+                
+                for strategy, signal in signals.items():
+                    # Calcular peso final con ajustes de bear market
+                    final_weight = self.calculate_bear_market_signal_weight(
+                        signal, market_state, regime, volatility, sentiment, 
+                        risk_level, ml_prediction
+                    )
+                    
+                    # Filtrar por confianza mínima más alta
+                    if final_weight >= self.config.MIN_CONFIDENCE:
+                        enhanced_signal = {
+                            'pair': pair,
+                            'timeframe': timeframe,
+                            'strategy': strategy,
+                            'weight': final_weight,
+                            'market_state': market_state,
+                            'regime': regime,
+                            'volatility': volatility,
+                            'sentiment': sentiment,
+                            'risk_level': risk_level,
+                            **signal
+                        }
+                        all_signals.append(enhanced_signal)
+        
+        # Optimizar portafolio y ejecutar operaciones
+        await self.optimize_and_execute_bear_market(all_signals)
+        
+        # Monitorear posiciones existentes con énfasis en protección
+        await self.monitor_bear_market_positions()
+        
+        # Actualizar rendimiento
+        self.update_bear_market_performance()
+        
+        print(f"Ciclo de bear market completado. Señales generadas: {len(all_signals)}")
+    
+    def calculate_bear_market_signal_weight(self, signal, market_state, regime, volatility, 
+                                        sentiment, risk_level, ml_prediction):
+        """Calcular peso final con ajustes específicos para bear market"""
+        weight = signal['strategy_score']
+        
+        # Ajustes extremos por condiciones de bear market
+        market_adjustments = {
+            'extreme_fear_high_volatility': 1.3,
+            'high_fear_moderate_volatility': 1.2,
+            'moderate_fear': 1.1,
+            'high_volatility_choppy': 0.7,
+            'low_momentum_consolidation': 0.9,
+            'transition': 1.0
+        }
+        
+        weight *= market_adjustments.get(market_state, 1.0)
+        
+        # Ajuste por régimen (más drástico)
+        if regime == 'extreme_fear':
+            if signal['strategy'] == 'mean_reversion':
+                weight *= 1.4  # Bonus significativo para mean reversion
+            elif signal['strategy'] == 'trend':
+                weight *= 0.5  # Penalización severa para tendencia
+        elif regime == 'fear':
+            if signal['strategy'] == 'mean_reversion':
+                weight *= 1.2
+            elif signal['strategy'] == 'trend':
+                weight *= 0.7
+        
+        # Ajuste por volatilidad
+        if volatility == 'extreme_high':
+            if signal['strategy'] in ['breakout', 'momentum']:
+                weight *= 0.6  # Penalización severa
+            elif signal['strategy'] == 'mean_reversion':
+                weight *= 1.3  # Bonus para mean reversion en volatilidad extrema
+        
+        # Ajuste por sentimiento
+        if sentiment == 'extreme_fear':
+            if signal['type'].endswith('long'):
+                weight *= 1.25  # Bonus para compras en miedo extremo
+            elif signal['type'].endswith('short'):
+                weight *= 0.8   # Penalización para ventas en miedo extremo
+        
+        # Ajuste por nivel de riesgo
+        if risk_level == 'very_high':
+            weight *= 0.8  # Reducción general en riesgo extremo
+        elif risk_level == 'high':
+            weight *= 0.9
+        
+        # Ajuste por predicción de ML
+        if ml_prediction and ml_prediction['confidence'] > 0.8:
+            if ((signal['type'].endswith('long') and ml_prediction['direction'] == 1) or
+                (signal['type'].endswith('short') and ml_prediction['direction'] == 0)):
+                weight *= (1 + ml_prediction['confidence'] * 0.15)
+        
+        return min(weight, 1.0)
+    
+    async def optimize_and_execute_bear_market(self, signals):
+        """Optimizar portafolio y ejecutar operaciones para bear market"""
+        if not signals:
+            return
+        
+        # Ordenar señales por peso y estrategia (priorizar mean reversion y ML)
+        strategy_priority = {
+            'mean_reversion': 1.3,
+            'ml_prediction': 1.2,
+            'momentum': 1.0,
+            'breakout': 0.9,
+            'harmonic': 0.8,
+            'trend': 0.5
+        }
+        
+        signals.sort(key=lambda x: (x['weight'] * strategy_priority.get(x['strategy'], 1.0)), reverse=True)
+        
+        # Selección muy selectiva con diversificación estricta
+        selected_signals = self.select_bear_market_diversified_signals(signals)
+        
+        for signal in selected_signals:
+            # Calcular tamaño de posición ultra conservador
+            position_size = self.calculate_bear_market_position_size(signal)
+            
+            # Ejecutar operación
+            await self.execute_bear_market_trade(signal, position_size)
+    
+    def select_bear_market_diversified_signals(self, signals):
+        """Seleccionar señales con diversificación ultra conservadora"""
+        selected = []
+        used_pairs = set()
+        used_strategies = {}
+        risk_exposure = 0
+        max_risk_exposure = 0.15  # Máximo 15% de exposición total
+        
+        for signal in signals:
+            pair = signal['pair']
+            strategy = signal['strategy']
+            risk_level = signal['risk_level']
+            
+            # Calcular exposición estimada
+            estimated_exposure = self.config.RISK_PER_TRADE * signal['weight']
+            
+            # Verificar límite de exposición total
+            if risk_exposure + estimated_exposure > max_risk_exposure:
+                continue
+            
+            # Limitar por par (máximo 1 operación por par)
+            if pair in used_pairs:
+                continue
+            
+            # Limitar por estrategia (máximo 1 operación por estrategia)
+            if strategy in used_strategies:
+                continue
+            
+            # Priorizar estrategias seguras en bear market
+            if strategy not in ['mean_reversion', 'ml_prediction'] and risk_exposure > 0.1:
+                continue
+            
+            # Limitar total de posiciones
+            if len(selected) >= self.config.MAX_POSITIONS:
+                break
+            
+            selected.append(signal)
+            used_pairs.add(pair)
+            used_strategies[strategy] = True
+            risk_exposure += estimated_exposure
+        
+        return selected
+    
+    def calculate_bear_market_position_size(self, signal):
+        """Calcular tamaño de posición ultra conservador para bear market"""
+        strategy_config = self.config.STRATEGY_RISK[signal['strategy']]
+        
+        # Ajuste de riesgo extremadamente conservador
+        risk_adjustment = signal['weight'] * 0.7  # Reducción del 30%
+        base_risk = self.config.RISK_PER_TRADE * risk_adjustment
+        
+        # Calcular riesgo monetario
+        risk_amount = self.capital * base_risk
+        
+        # Calcular distancia de stop loss
+        stop_distance = abs(signal['entry_price'] - signal['stop_loss'])
+        
+        # Calcular tamaño base
+        base_size = risk_amount / stop_distance
+        
+        # Aplicar apalancamiento reducido
+        leveraged_size = base_size * strategy_config['leverage']
+        
+        # Limitar tamaño máximo por posición (más estricto)
+        max_size = self.capital * 0.04 / signal['entry_price']  # Máximo 4% por posición
+        
+        # Ajuste por volatilidad
+        volatility_adjustment = 1.0
+        if signal['volatility'] == 'extreme_high':
+            volatility_adjustment = 0.6
+        elif signal['volatility'] == 'high':
+            volatility_adjustment = 0.8
+        elif signal['volatility'] == 'low':
+            volatility_adjustment = 1.1
+        
+        # Ajuste por nivel de riesgo
+        risk_adjustment_factor = 1.0
+        if signal['risk_level'] == 'very_high':
+            risk_adjustment_factor = 0.5
+        elif signal['risk_level'] == 'high':
+            risk_adjustment_factor = 0.7
+        
+        final_size = min(leveraged_size, max_size) * volatility_adjustment * risk_adjustment_factor
+        
+        return max(final_size, 0.0005)  # Mínimo muy bajo
+    
+    async def execute_bear_market_trade(self, signal, position_size):
+        """Ejecutar operación con protecciones adicionales para bear market"""
+        pair = signal['pair']
+        strategy = signal['strategy']
+        
+        try:
+            # Obtener precio actual
+            ticker = self.data_fetcher.exchanges['binance'].fetch_ticker(pair)
+            current_price = ticker['last']
+            
+            # Determinar lado
+            side = 'buy' if signal['type'].endswith('long') else 'sell'
+            
+            # Crear ID de posición
+            position_id = f"{pair}_{strategy}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            # Calcular stop loss y take profit adicionales
+            atr = self.data_fetcher.fetch_historical_data(pair, '1h', 50)
+            if atr is not None:
+                atr_value = atr['close'].iloc[-1] * 0.02  # ATR aproximado
+            else:
+                atr_value = current_price * 0.02
+            
+            # Stop loss de emergencia (más ajustado)
+            emergency_stop_distance = atr_value * 2.0
+            if side == 'buy':
+                emergency_stop = current_price - emergency_stop_distance
+            else:
+                emergency_stop = current_price + emergency_stop_distance
+            
+            # Registrar posición con protecciones adicionales
+            self.positions[position_id] = {
+                'id': position_id,
+                'pair': pair,
+                'strategy': strategy,
+                'side': side,
+                'entry_price': current_price,
+                'size': position_size,
+                'stop_loss': signal['stop_loss'],
+                'take_profit': signal['take_profit'],
+                'emergency_stop': emergency_stop,
+                'weight': signal['weight'],
+                'market_state': signal['market_state'],
+                'risk_level': signal['risk_level'],
+                'entry_time': datetime.now(),
+                'status': 'open',
+                'pnl': 0,
+                'max_profit': 0,
+                'trailing_stops': [],
+                'protection_triggers': {
+                    'max_loss': 0,  # Para tracking de pérdidas máximas
+                    'time_limit': datetime.now() + timedelta(hours=48)  # Límite de tiempo
+                }
+            }
+            
+            print(f"Operación bear market ejecutada: {side} {position_size:.4f} {pair} @ {current_price} "
+                  f"(Confianza: {signal['weight']:.2f}, Riesgo: {signal['risk_level']})")
+            
+        except Exception as e:
+            print(f"Error ejecutando operación bear market: {e}")
+    
+    async def monitor_bear_market_positions(self):
+        """Monitorear posiciones con protecciones adicionales para bear market"""
+        positions_to_close = []
+        
+        for position_id, position in self.positions.items():
+            if position['status'] != 'open':
+                continue
+            
+            pair = position['pair']
+            try:
+                # Obtener precio actual
+                ticker = self.data_fetcher.exchanges['binance'].fetch_ticker(pair)
+                current_price = ticker['last']
+                
+                # Calcular P&L
+                if position['side'] == 'buy':
+                    pnl = (current_price - position['entry_price']) * position['size']
+                else:
+                    pnl = (position['entry_price'] - current_price) * position['size']
+                
+                position['current_price'] = current_price
+                position['pnl'] = pnl
+                
+                # Actualizar máximo beneficio
+                if pnl > position['max_profit']:
+                    position['max_profit'] = pnl
+                
+                # Implementar trailing stop ultra conservador
+                if position['max_profit'] > 0:
+                    trailing_distance = abs(position['entry_price'] - position['stop_loss']) * 0.3  # 30% del riesgo original
+                    
+                    if position['side'] == 'buy':
+                        new_stop_loss = current_price - trailing_distance
+                        if new_stop_loss > position['stop_loss']:
+                            position['stop_loss'] = new_stop_loss
+                            position['trailing_stops'].append({
+                                'time': datetime.now(),
+                                'price': new_stop_loss
+                            })
+                    else:
+                        new_stop_loss = current_price + trailing_distance
+                        if new_stop_loss < position['stop_loss']:
+                            position['stop_loss'] = new_stop_loss
+                            position['trailing_stops'].append({
+                                'time': datetime.now(),
+                                'price': new_stop_loss
+                            })
+                
+                # Verificar condiciones de cierre
+                should_close = False
+                close_reason = ""
+                
+                # 1. Stop loss normal
+                if position['side'] == 'buy' and current_price <= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                elif position['side'] == 'sell' and current_price >= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                
+                # 2. Take profit normal
+                elif position['side'] == 'buy' and current_price >= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                elif position['side'] == 'sell' and current_price <= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                
+                # 3. Emergency stop (protección adicional)
+                elif position['side'] == 'buy' and current_price <= position['emergency_stop']:
+                    should_close = True
+                    close_reason = "Emergency Stop"
+                elif position['side'] == 'sell' and current_price >= position['emergency_stop']:
+                    should_close = True
+                    close_reason = "Emergency Stop"
+                
+                # 4. Límite de tiempo (protección contra operaciones prolongadas)
+                elif datetime.now() > position['protection_triggers']['time_limit']:
+                    should_close = True
+                    close_reason = "Time Limit"
+                
+                # 5. Protección por deterioro del mercado
+                elif pnl < -abs(position['entry_price'] - position['stop_loss']) * position['size'] * 1.5:
+                    should_close = True
+                    close_reason = "Market Deterioration"
+                
+                if should_close:
+                    positions_to_close.append((position_id, close_reason))
+                
+            except Exception as e:
+                print(f"Error monitoreando posición bear market {position_id}: {e}")
+        
+        # Cerrar posiciones
+        for position_id, reason in positions_to_close:
+            await self.close_bear_market_position(position_id, reason)
+    
+    async def close_bear_market_position(self, position_id, reason):
+        """Cerrar posición y actualizar métricas especializadas"""
+        if position_id not in self.positions:
+            return
+        
+        position = self.positions[position_id]
+        
+        # Actualizar estado
+        position['status'] = 'closed'
+        position['close_time'] = datetime.now()
+        position['close_reason'] = reason
+        
+        # Actualizar capital
+        self.capital += position['pnl']
+        
+        # Actualizar métricas generales
+        self.total_trades += 1
+        if position['pnl'] > 0:
+            self.winning_trades += 1
+        self.total_pnl += position['pnl']
+        
+        # Actualizar métricas por estrategia
+        strategy = position['strategy']
+        if strategy not in self.strategy_performance:
+            self.strategy_performance[strategy] = {
+                'trades': 0, 'wins': 0, 'total_pnl': 0, 'avg_holding_time': 0
+            }
+        
+        holding_time = (position['close_time'] - position['entry_time']).total_seconds() / 3600
+        self.strategy_performance[strategy]['trades'] += 1
+        if position['pnl'] > 0:
+            self.strategy_performance[strategy]['wins'] += 1
+        self.strategy_performance[strategy]['total_pnl'] += position['pnl']
+        
+        # Actualizar tiempo promedio de mantenimiento
+        current_avg = self.strategy_performance[strategy]['avg_holding_time']
+        trades_count = self.strategy_performance[strategy]['trades']
+        self.strategy_performance[strategy]['avg_holding_time'] = (
+            (current_avg * (trades_count - 1) + holding_time) / trades_count
+        )
+        
+        # Mover a historial
+        self.performance_history.append(position)
+        
+        # Eliminar de posiciones activas
+        del self.positions[position_id]
+        
+        print(f"Posición bear market cerrada: {position_id} - {reason} - P&L: ${position['pnl']:.2f}")
+    
+    def update_bear_market_performance(self):
+        """Actualizar métricas de rendimiento especializadas para bear market"""
+        if self.capital > self.peak_capital:
+            self.peak_capital = self.capital
+        
+        win_rate = self.winning_trades / self.total_trades if self.total_trades > 0 else 0
+        current_drawdown = (self.peak_capital - self.capital) / self.peak_capital
+        
+        # Actualizar drawdown máximo
+        if current_drawdown > self.risk_metrics['max_drawdown']:
+            self.risk_metrics['max_drawdown'] = current_drawdown
+        
+        self.risk_metrics['current_drawdown'] = current_drawdown
+        
+        # Calcular VaR 95% simplificado
+        if len(self.performance_history) > 20:
+            recent_pnls = [p['pnl'] for p in self.performance_history[-20:]]
+            var_95 = np.percentile(recent_pnls, 5)
+            self.risk_metrics['var_95'] = var_95
+        
+        # Calcular Sharpe ratio simplificado
+        if len(self.performance_history) > 10:
+            recent_returns = [p['pnl'] / self.capital for p in self.performance_history[-10:]]
+            if len(recent_returns) > 1:
+                avg_return = np.mean(recent_returns)
+                std_return = np.std(recent_returns)
+                if std_return > 0:
+                    self.risk_metrics['sharpe_ratio'] = avg_return / std_return * np.sqrt(365)
+        
+        print("\n=== Rendimiento Quantum Fusion Bear Market ===")
+        print(f"Capital: ${self.capital:,.2f}")
+        print(f"Operaciones: {self.total_trades}")
+        print(f"Win Rate: {win_rate:.2%}")
+        print(f"P&L Total: ${self.total_pnl:,.2f}")
+        print(f"Drawdown Actual: {current_drawdown:.2%}")
+        print(f"Drawdown Máximo: {self.risk_metrics['max_drawdown']:.2%}")
+        print(f"VaR 95%: ${self.risk_metrics['var_95']:.2f}")
+        print(f"Sharpe Ratio: {self.risk_metrics['sharpe_ratio']:.3f}")
+        print(f"Posiciones abiertas: {len(self.positions)}")
+        
+        # Rendimiento por estrategia
+        print("\nRendimiento por Estrategia (Bear Market):")
+        for strategy, perf in self.strategy_performance.items():
+            strategy_win_rate = perf['wins'] / perf['trades'] if perf['trades'] > 0 else 0
+            avg_holding_hours = perf['avg_holding_time']
+            print(f"  {strategy}: {perf['trades']} trades, {strategy_win_rate:.2%} win rate, "
+                  f"${perf['total_pnl']:,.2f} P&L, {avg_holding_hours:.1f}h promedio")
+        
+        print("===============================================\n")
+    
+    async def run(self, interval_minutes=5):
+        """Ejecutar el sistema continuamente para bear market"""
+        await self.initialize()
+        
+        print(f"Iniciando Quantum Fusion Bear Market Edition con intervalo de {interval_minutes} minutos")
+        
+        while True:
+            try:
+                start_time = time.time()
+                
+                # Ejecutar ciclo especializado para bear market
+                await self.execute_bear_market_cycle()
+                
+                # Calcular tiempo de espera
+                elapsed = time.time() - start_time
+                wait_time = max(0, interval_minutes * 60 - elapsed)
+                
+                print(f"Esperando {wait_time/60:.1f} minutos hasta el siguiente ciclo...")
+                await asyncio.sleep(wait_time)
+                
+            except KeyboardInterrupt:
+                print("\nDeteniendo Quantum Fusion Bear Market Edition...")
+                break
+            except Exception as e:
+                print(f"Error en ciclo de trading bear market: {e}")
+                await asyncio.sleep(60)
+
+# ==================== EJECUCIÓN PRINCIPAL ====================
+async def main():
+    """Función principal para bear market"""
+    trading_system = QuantumFusionBearMarketEdition()
+    await trading_system.run(interval_minutes=5)
+
+if __name__ == "__main__":
+    asyncio.run(main())

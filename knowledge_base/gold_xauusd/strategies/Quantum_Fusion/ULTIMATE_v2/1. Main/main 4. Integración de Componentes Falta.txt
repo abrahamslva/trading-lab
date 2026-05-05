@@ -1,0 +1,355 @@
+4. Integración de Componentes Faltantes en main.py
+
+# main.py - Agregar componentes faltantes
+class QuantumTradingUltimate:
+    def __init__(self, config_path: str = None):
+        # ... código existente ...
+        
+        # Inicializar nuevos componentes
+        self.market_cycle_detector = MarketCycleDetector(self.config)
+        self.probabilistic_decision = ProbabilisticDecisionSystem(self.config)
+        
+        # Estado de predicciones para detección de drift
+        self.last_predictions = []
+        self.last_actuals = []
+    
+    def generate_signal(self, symbol: str) -> Tuple[str, float, Dict]:
+        """Generar señal de trading con todos los filtros y mejoras"""
+        try:
+            # Preparar características
+            features = self.prepare_features(symbol)
+            if features.empty or len(features) < 50:
+                self.logger.warning(f"No se pudieron preparar características para {symbol}")
+                return 'hold', 0.5, {}
+            
+            # Detectar ciclo de mercado
+            market_cycle = self.market_cycle_detector.detect_market_cycle(features)
+            cycle_strategy = self.market_cycle_detector.get_cycle_strategy(market_cycle)
+            
+            # Detectar regímenes extremos
+            extreme_regime = self.extreme_regime_detector.detect_extreme_regimes(features)
+            regime_recommendations = self.extreme_regime_detector.get_regime_recommendations(extreme_regime)
+            
+            # Si régimen extremo, aplicar recomendaciones
+            if extreme_regime['regime'] in ['extreme', 'high_stress']:
+                self.logger.warning(f"Régimen {extreme_regime['regime']} detectado para {symbol}")
+                
+                # Aplicar acciones recomendadas
+                for action in regime_recommendations['actions']:
+                    if action['action'] == 'avoid_new_positions' and action['priority'] == 'high':
+                        return 'hold', 0.1, {
+                            'extreme_regime': extreme_regime,
+                            'market_cycle': market_cycle
+                        }
+            
+            # Obtener predicciones del modelo jerárquico
+            latest_features = features.iloc[-1:].copy()
+            market_conditions = self.analyze_market_conditions(features)
+            
+            # Obtener predicciones de múltiples modelos
+            model_predictions = {
+                'hierarchical': self.hierarchical_model.predict_final_decision(
+                    latest_features, market_conditions
+                ),
+                'multilayer': self.multilayer_decision.generate_multilayer_decision(
+                    latest_features, market_conditions
+                )
+            }
+            
+            # Generar decisión probabilística
+            probabilistic_decision = self.probabilistic_decision.generate_probabilistic_decision(
+                latest_features, model_predictions
+            )
+            
+            # Aplicar filtros mejorados
+            filtered_signal = self.apply_enhanced_signal_filters(
+                probabilistic_decision['decision'],
+                probabilistic_decision['uncertainty'],
+                market_conditions,
+                extreme_regime,
+                market_cycle
+            )
+            
+            # Calcular fuerza de la señal mejorada
+            signal_strength = self.calculate_enhanced_signal_strength(
+                filtered_signal,
+                probabilistic_decision['uncertainty'],
+                market_conditions,
+                extreme_regime,
+                market_cycle,
+                cycle_strategy
+            )
+            
+            # Determinar señal final
+            if signal_strength > 0.65:
+                return 'buy', signal_strength, {
+                    'market_conditions': market_conditions,
+                    'extreme_regime': extreme_regime,
+                    'market_cycle': market_cycle,
+                    'cycle_strategy': cycle_strategy,
+                    'probabilistic_decision': probabilistic_decision,
+                    'regime_recommendations': regime_recommendations
+                }
+            elif signal_strength < 0.35:
+                return 'sell', signal_strength, {
+                    'market_conditions': market_conditions,
+                    'extreme_regime': extreme_regime,
+                    'market_cycle': market_cycle,
+                    'cycle_strategy': cycle_strategy,
+                    'probabilistic_decision': probabilistic_decision,
+                    'regime_recommendations': regime_recommendations
+                }
+            else:
+                return 'hold', signal_strength, {
+                    'market_conditions': market_conditions,
+                    'extreme_regime': extreme_regime,
+                    'market_cycle': market_cycle,
+                    'cycle_strategy': cycle_strategy,
+                    'probabilistic_decision': probabilistic_decision,
+                    'regime_recommendations': regime_recommendations
+                }
+            
+        except Exception as e:
+            self.logger.error(f"Error generando señal para {symbol}: {e}")
+            return 'hold', 0.5, {}
+    
+    def apply_enhanced_signal_filters(self, prediction: float, uncertainty: float,
+                                    market_conditions: Dict, extreme_regime: Dict,
+                                    market_cycle: Dict) -> float:
+        """Aplicar filtros mejorados a la señal del modelo"""
+        try:
+            filtered_signal = prediction
+            
+            # Filtro de confianza
+            if uncertainty > 0.3:
+                filtered_signal = 0.5
+            
+            # Filtro de régimen extremo
+            regime = extreme_regime.get('regime', 'normal')
+            if regime == 'extreme':
+                filtered_signal = 0.5  # Mantener posición actual
+            elif regime == 'high_stress':
+                # Reducir fuerza de señal
+                filtered_signal = 0.5 + (filtered_signal - 0.5) * 0.5
+            
+            # Filtro de ciclo de mercado
+            cycle_phase = market_cycle.get('phase', 'unknown')
+            cycle_confidence = market_cycle.get('confidence', 0.5)
+            
+            if cycle_confidence > 0.7:  # Solo aplicar si alta confianza en ciclo
+                if cycle_phase == 'accumulation' and filtered_signal < 0.5:
+                    # En acumulación, favorecer señales de compra
+                    filtered_signal = max(filtered_signal, 0.4)
+                elif cycle_phase == 'distribution' and filtered_signal > 0.5:
+                    # En distribución, favorecer señales de venta
+                    filtered_signal = min(filtered_signal, 0.6)
+                elif cycle_phase == 'markdown':
+                    # En markdown, reducir fuerza de compras
+                    if filtered_signal > 0.5:
+                        filtered_signal = 0.5 + (filtered_signal - 0.5) * 0.5
+            
+            # Filtros existentes
+            filtered_signal = self.apply_signal_filters(
+                prediction, 1 - uncertainty, uncertainty, market_conditions
+            )
+            
+            return filtered_signal
+            
+        except Exception as e:
+            self.logger.error(f"Error aplicando filtros de señal mejorados: {e}")
+            return 0.5
+    
+    def calculate_enhanced_signal_strength(self, signal: float, uncertainty: float,
+                                         market_conditions: Dict, extreme_regime: Dict,
+                                         market_cycle: Dict, cycle_strategy: Dict) -> float:
+        """Calcular fuerza final de la señal con mejoras"""
+        try:
+            # Base: señal filtrada
+            strength = signal
+            
+            # Ajustar por incertidumbre
+            if uncertainty > 0.2:
+                strength *= (1 - uncertainty)
+            
+            # Ajustar por régimen extremo
+            regime = extreme_regime.get('regime', 'normal')
+            if regime == 'extreme':
+                strength *= 0.3  # Reducir drásticamente
+            elif regime == 'high_stress':
+                strength *= 0.6  # Reducir moderadamente
+            elif regime == 'moderate_stress':
+                strength *= 0.8  # Reducir ligeramente
+            
+            # Ajustar por ciclo de mercado
+            cycle_phase = market_cycle.get('phase', 'unknown')
+            cycle_confidence = market_cycle.get('confidence', 0.5)
+            
+            if cycle_confidence > 0.7:  # Solo aplicar si alta confianza en ciclo
+                position_size_factor = cycle_strategy.get('position_size', 0.5)
+                strength *= position_size_factor
+            
+            # Ajustes existentes
+            strength = self.calculate_signal_strength(
+                signal, 1 - uncertainty, uncertainty, market_conditions
+            )
+            
+            return np.clip(strength, 0, 1)
+            
+        except Exception as e:
+            self.logger.error(f"Error calculando fuerza de señal mejorada: {e}")
+            return 0.5
+    
+    def execute_trade(self, symbol: str, signal: str, signal_strength: float,
+                     market_conditions: Dict):
+        """Ejecutar operación con optimización completa y mejoras"""
+        if signal == 'hold':
+            return
+        
+        try:
+            # Obtener precio actual
+            ticker = self.exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            
+            # Calcular tamaño de posición base
+            account_state = self.risk_manager.portfolio_state.copy()
+            account_state['positions'] = self.positions
+            account_state['current_drawdown'] = \
+                self.risk_manager.portfolio_state['current_drawdown']
+            account_state['recent_performance'] = \
+                self.calculate_recent_performance()
+            
+            # Preparar características para gestión de riesgo
+            features = self.prepare_features(symbol)
+            if not features.empty:
+                market_features = features.iloc[-1:].copy()
+            else:
+                market_features = pd.DataFrame()
+            
+            # Calcular tamaño de posición base
+            base_position_size, risk_factors = \
+                self.risk_manager.calculate_position_size(
+                    signal_strength, market_features, account_state
+                )
+            
+            # Ajustar tamaño de posición por decisión probabilística
+            if 'probabilistic_decision' in market_conditions:
+                probabilistic_decision = market_conditions['probabilistic_decision']
+                final_position_size = self.probabilistic_decision.calculate_position_size_probabilistic(
+                    probabilistic_decision, base_position_size
+                )
+            else:
+                final_position_size = base_position_size
+            
+            # Seleccionar método de ejecución óptimo
+            execution_method = self.execution_optimizer.select_optimal_execution_method(
+                symbol, final_position_size, market_conditions
+            )
+            
+            # Ejecutar orden con método seleccionado
+            orders, executed_size = \
+                self.execution_optimizer.execute_order_with_method(
+                    self.exchange, symbol, signal, final_position_size,
+                    execution_method, market_conditions
+                )
+            
+            if executed_size > 0:
+                # Calcular stop-loss adaptativo
+                stop_loss = self.risk_manager.calculate_adaptive_stop_loss(
+                    {
+                        'side': signal,
+                        'signal_strength': signal_strength
+                    },
+                    current_price,
+                    market_features
+                )
+                
+                # Calcular take-profit
+                take_profit = self.risk_manager.calculate_take_profit(
+                    current_price, stop_loss, signal == 'buy'
+                )
+                
+                # Guardar posición
+                self.positions[symbol] = {
+                    'side': signal,
+                    'entry_price': current_price,
+                    'quantity': executed_size,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'orders': orders,
+                    'signal_strength': signal_strength,
+                    'entry_time': datetime.now(),
+                    'risk_factors': risk_factors,
+                    'market_conditions': market_conditions,
+                    'execution_method': execution_method
+                }
+                
+                self.logger.info(
+                    f"{signal.upper()} ejecutada: {symbol} @ {current_price}, "
+                    f"Cantidad: {executed_size}, Método: {execution_method}, "
+                    f"SL: {stop_loss}, TP: {take_profit}"
+                )
+                
+                # Guardar predicción para detección de drift
+                if 'probabilistic_decision' in market_conditions:
+                    self.last_predictions.append(market_conditions['probabilistic_decision']['decision'])
+                    # El actual se agregará cuando se cierre la posición
+            
+        except Exception as e:
+            self.logger.error(f"Error ejecutando operación para {symbol}: {e}")
+    
+    def close_position(self, symbol: str, reason: str):
+        """Cerrar posición"""
+        if symbol not in self.positions:
+            return
+        
+        position = self.positions[symbol]
+        
+        try:
+            if position['side'] == 'buy':
+                order = self.exchange.create_market_sell_order(symbol, position['quantity'])
+            else:
+                order = self.exchange.create_market_buy_order(symbol, position['quantity'])
+            
+            # Calcular PnL
+            current_price = order['price']
+            if position['side'] == 'buy':
+                pnl = (current_price - position['entry_price']) / position['entry_price']
+            else:
+                pnl = (position['entry_price'] - current_price) / position['entry_price']
+            
+            # Guardar actual para detección de drift
+            self.last_actuals.append(1 if pnl > 0 else 0)
+            
+            # Limitar historial para detección de drift
+            max_history = 100
+            if len(self.last_predictions) > max_history:
+                self.last_predictions = self.last_predictions[-max_history:]
+            if len(self.last_actuals) > max_history:
+                self.last_actuals = self.last_actuals[-max_history:]
+            
+            # Registrar cierre
+            self.logger.info(
+                f"Posición cerrada - {symbol}: {reason}, "
+                f"PnL: {pnl:.2%}"
+            )
+            
+            # Actualizar rendimiento de indicadores y sentimiento con resultado real
+            self.indicators.update_indicator_performance(symbol, position['side'], pnl)
+            self.sentiment.update_sentiment_performance(symbol, pnl)
+            
+            # Eliminar posición
+            del self.positions[symbol]
+            
+            # Actualizar historial de rendimiento
+            self.performance_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'reason': reason,
+                'pnl': pnl,
+                'holding_period': (datetime.now() - position['entry_time']).total_seconds() / 3600,
+                'signal_type': position['side'],
+                'market_conditions': position['market_conditions']
+            })
+            
+        except Exception as e:
+            self.logger.error(f"Error cerrando posición para {symbol}: {e}")

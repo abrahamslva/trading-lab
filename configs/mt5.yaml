@@ -1,0 +1,40 @@
+# configs/mt5.yaml — MetaTrader 5 connection & trading parameters
+# Sensitive values (login, password) should be provided via environment variables:
+#   MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+# Values here are used as fallbacks only.
+
+connection:
+  # Full path to terminal64.exe on the Windows host
+  terminal_path: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+  # Override with MT5_SERVER env var
+  server: ""
+  # Override with MT5_LOGIN env var (integer account number)
+  login: 0
+  # Override with MT5_PASSWORD env var
+  password: ""
+  # Connection timeout in milliseconds
+  timeout: 10000
+
+symbol:
+  # Symbol as it appears in MT5 Market Watch
+  forex:   "XAUUSD"
+  futures: "GOLD"      # broker-specific; e.g. "XAUUSD.m" or "#GOLD"
+  # Active symbol type: forex | futures
+  active: "forex"
+
+trading:
+  magic_number: 20240101   # unique EA identifier
+  deviation:    10          # max price deviation in points
+  risk_percent: 1.0         # % of account balance risked per trade
+  # Stop-loss / take-profit in points (0 = disabled)
+  sl_points:    0
+  tp_points:    0
+
+bridge:
+  # File path where Python writes signals and EA reads them
+  # On Windows MT5, use an absolute path or a path relative to the EA's
+  # Files sandbox (MQL5/Files/).  The EA reads from MQL5/Files/signal.json
+  # Set to an absolute path accessible by both Python and MT5.
+  signal_file: "mt5/bridge/signal.json"
+  # Polling interval (seconds) for the signal writer loop
+  poll_interval: 60

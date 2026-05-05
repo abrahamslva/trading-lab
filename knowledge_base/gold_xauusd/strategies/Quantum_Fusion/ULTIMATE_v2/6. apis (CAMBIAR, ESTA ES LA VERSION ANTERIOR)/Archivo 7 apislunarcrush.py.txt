@@ -1,0 +1,239 @@
+Archivo 7: apis/lunarcrush.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+LUNARCRUSH API ANALYZER - PAQUETE ESENCIAL
+"""
+
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+class LunarCrushAnalyzer:
+    """Analizador de datos de LunarCrush API"""
+    
+    def __init__(self, api_key: str):
+        """Inicializar analizador de LunarCrush"""
+        self.api_key = api_key
+        self.base_url = "https://lunarcrush.com/api3/coin"
+    
+    def get_social_sentiment(self, symbol: str) -> Dict:
+        """Obtener datos de sentimiento social"""
+        try:
+            params = {
+                "key": self.api_key,
+                "symbol": symbol,
+                "data": "social"
+            }
+            
+            response = requests.get(self.base_url, params=params)
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de LunarCrush: {e}")
+            return {}
+    
+    def calculate_social_signals(self, social_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en sentimiento social"""
+        signals = {}
+        
+        if 'data' in social_data and len(social_data['data']) > 0:
+            data = social_data['data'][0]  # Primer resultado
+            
+            # Galaxy Score (0-1000)
+            galaxy_score = data.get('galaxy_score', 500)
+            if galaxy_score > 700:  # Alto interés social
+                signals['galaxy'] = 0.3
+            elif galaxy_score < 300:  # Bajo interés social
+                signals['galaxy'] = -0.3
+            
+            # Social Volume
+            social_volume = data.get('social_volume', 0)
+            social_volume_24h_change = data.get('social_volume_24h_change', 0)
+            if social_volume > 0 and social_volume_24h_change > 50:  # +50% en volumen social
+                signals['social_volume'] = 0.3
+            
+            # AltRank
+            altrank = data.get('altrank', 0)
+            if altrank < 100:  # Top 100 en popularidad
+                signals['altrank'] = 0.2
+            
+            # Sentimiento general
+            sentiment = data.get('sentiment', 0)
+            if sentiment > 0.7:  # Sentimiento muy positivo
+                signals['sentiment'] = 0.3
+            elif sentiment < -0.7:  # Sentimiento muy negativo
+                signals['sentiment'] = -0.3
+            
+            # Cambio en precio (24h)
+            price_change = data.get('percent_change_24h', 0)
+            if price_change > 20:  # +20% en 24h
+                signals['price_momentum'] = 0.3
+            elif price_change < -20:  # -20% en 24h
+                signals['price_momentum'] = -0.3
+        
+        return signals
+    
+    def get_market_metrics(self, symbol: str) -> Dict:
+        """Obtener métricas de mercado"""
+        try:
+            params = {
+                "key": self.api_key,
+                "symbol": symbol,
+                "data": "market"
+            }
+            
+            response = requests.get(self.base_url, params=params)
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error obteniendo métricas de mercado: {e}")
+            return {}
+    
+    def calculate_market_signals(self, market_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en métricas de mercado"""
+        signals = {}
+        
+        if 'data' in market_data and len(market_data['data']) > 0:
+            data = market_data['data'][0]
+            
+            # Precio y cambio de precio
+            price = data.get('price', 0)
+            price_change_24h = data.get('percent_change_24h', 0)
+            price_change_7d = data.get('percent_change_7d', 0)
+            
+            if price_change_24h > 20 and price_change_7d > 50:
+                signals['strong_uptrend'] = 0.4
+            elif price_change_24h < -20 and price_change_7d < -50:
+                signals['strong_downtrend'] = -0.4
+            
+            # Volumen 24h
+            volume_24h = data.get('volume_24h', 0)
+            volume_change = data.get('volume_24h_change', 0)
+            
+            if volume_24h > 1000000 and volume_change > 50:
+                signals['high_volume'] = 0.3
+            
+            # Capitalización de mercado
+            market_cap = data.get('market_cap', 0)
+            if market_cap > 1000000000:  # >$1B market cap
+                signals['high_market_cap'] = 0.2
+            
+            # Dominancia de Bitcoin
+            btc_dominance = data.get('btc_dominance', 0)
+            if btc_dominance > 50:  # >50% BTC dominance
+                signals['high_btc_dominance'] = -0.2  # Altcoin season
+        
+        return signals
+    
+    def get_alt_rank_data(self, symbol: str) -> Dict:
+        """Obtener datos de AltRank"""
+        try:
+            params = {
+                "key": self.api_key,
+                "symbol": symbol,
+                "data": "alt_rank"
+            }
+            
+            response = requests.get(self.base_url, params=params)
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de AltRank: {e}")
+            return {}
+    
+    def calculate_alt_rank_signals(self, alt_rank_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en AltRank"""
+        signals = {}
+        
+        if 'data' in alt_rank_data and len(alt_rank_data['data']) > 0:
+            data = alt_rank_data['data'][0]
+            
+            # AltRank (1-1000, más bajo es mejor)
+            altrank = data.get('alt_rank', 500)
+            altrank_change_24h = data.get('alt_rank_24h_change', 0)
+            
+            if altrank < 100:  # Top 100
+                signals['top_altcoin'] = 0.3
+            
+            if altrank_change_24h < -50:  # Mejora significativa en ranking
+                signals['improving_rank'] = 0.3
+            elif altrank_change_24h > 50:  # Empeoramiento significativo en ranking
+                signals['worsening_rank'] = -0.3
+            
+            # Galaxy Score
+            galaxy_score = data.get('galaxy_score', 500)
+            if galaxy_score > 800:  # Alto Galaxy Score
+                signals['high_galaxy'] = 0.2
+            
+            # Social Volume
+            social_volume = data.get('social_volume', 0)
+            social_volume_24h_change = data.get('social_volume_24h_change', 0)
+            
+            if social_volume > 1000000 and social_volume_24h_change > 50:
+                signals['high_social_volume'] = 0.2
+            
+            # Cambio en precio
+            price_change = data.get('percent_change_24h', 0)
+            if price_change > 20:
+                signals['price_momentum'] = 0.2
+            elif price_change < -20:
+                signals['price_momentum'] = -0.2
+        
+        return signals
+    
+    def get_correlation_data(self, symbol: str) -> Dict:
+        """Obtener datos de correlación"""
+        try:
+            params = {
+                "key": self.api_key,
+                "symbol": symbol,
+                "data": "correlation"
+            }
+            
+            response = requests.get(self.base_url, params=params)
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error obteniendo datos de correlación: {e}")
+            return {}
+    
+    def calculate_correlation_signals(self, correlation_data: Dict) -> Dict[str, float]:
+        """Calcular señales basadas en correlación"""
+        signals = {}
+        
+        if 'data' in correlation_data and len(correlation_data['data']) > 0:
+            data = correlation_data['data'][0]
+            
+            # Correlación con Bitcoin
+            btc_correlation = data.get('btc_correlation', 0)
+            if abs(btc_correlation) > 0.8:  # Alta correlación con Bitcoin
+                signals['high_btc_correlation'] = 0.2
+            elif abs(btc_correlation) < 0.2:  # Baja correlación con Bitcoin
+                signals['low_btc_correlation'] = 0.2
+            
+            # Correlación con Ethereum
+            eth_correlation = data.get('eth_correlation', 0)
+            if abs(eth_correlation) > 0.8:  # Alta correlación con Ethereum
+                signals['high_eth_correlation'] = 0.2
+            elif abs(eth_correlation) < 0.2:  # Baja correlación con Ethereum
+                signals['low_eth_correlation'] = 0.2
+            
+            # Correlación con S&P 500
+            sp_correlation = data.get('sp_correlation', 0)
+            if abs(sp_correlation) > 0.7:  # Alta correlación con S&P 500
+                signals['high_sp_correlation'] = 0.2
+            elif abs(sp_correlation) < 0.2:  # Baja correlación con S&P 500
+                signals['low_sp_correlation'] = 0.2
+            
+            # Correlación con Oro
+            gold_correlation = data.get('gold_correlation', 0)
+            if abs(gold_correlation) > 0.7:  # Alta correlación con Oro
+                signals['high_gold_correlation'] = 0.2
+            elif abs(gold_correlation) < 0.2:  # Baja correlación con Oro
+                signals['low_gold_correlation'] = 0.2
+        
+        return signals

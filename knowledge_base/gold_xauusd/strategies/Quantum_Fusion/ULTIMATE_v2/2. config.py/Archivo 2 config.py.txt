@@ -1,0 +1,503 @@
+Archivo 2: config.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CONFIGURACIÓN PARA QUANTUM TRADING ULTIMATE - VERSIÓN COMPLETA
+Con todas las mejoras implementadas
+"""
+
+import os
+import yaml
+from typing import Dict, Any
+
+class ConfigManager:
+    """Gestor de configuración del sistema completo"""
+    
+    def __init__(self, config_path: str = None):
+        """Inicializar gestor de configuración"""
+        self.config_path = config_path or 'quantum_config_complete.yaml'
+        self.config = self.load_config()
+    
+    def load_config(self) -> Dict[str, Any]:
+        """Cargar configuración desde archivo o crear por defecto"""
+        if os.path.exists(self.config_path):
+            with open(self.config_path, 'r') as f:
+                return yaml.safe_load(f)
+        else:
+            return self.create_default_config()
+    
+    def create_default_config(self) -> Dict[str, Any]:
+        """Crear configuración por defecto completa"""
+        config = {
+            'symbols': ["BTC/USDT", "ETH/USDT", "BNB/USDT"],
+            'timeframes': ['15m', '1h', '4h', '1d'],
+            
+            # Configuración de Binance
+            'binance': {
+                'api_key': "TU_API_KEY",
+                'api_secret': "TU_API_SECRET",
+                'testnet': True
+            },
+            
+            # Configuración de APIs gratuitas
+            'twitter': {
+                'bearer_token': "TU_BEARER_TOKEN"
+            },
+            'reddit': {
+                'client_id': "TU_CLIENT_ID",
+                'client_secret': "TU_CLIENT_SECRET"
+            },
+            'news': {
+                'api_key': "TU_NEWS_API_KEY"
+            },
+            
+            # Configuración de APIs Premium - Paquete Esencial
+            'premium_apis': {
+                'glassnode': {
+                    'enabled': True,
+                    'api_key': "TU_GLASSNODE_API_KEY"
+                },
+                'cryptoquant': {
+                    'enabled': True,
+                    'api_key': "TU_CRYPTOQUANT_API_KEY"
+                },
+                'lunarcrush': {
+                    'enabled': True,
+                    'api_key': "TU_LUNARCRUSH_API_KEY"
+                },
+                'kaiko': {
+                    'enabled': True,
+                    'api_key': "TU_KAIKO_API_KEY"
+                }
+            },
+            
+            # Pesos de señales premium
+            'premium_signal_weights': {
+                'on_chain': 0.35,  # Glassnode + CryptoQuant
+                'social': 0.25,     # LunarCrush
+                'liquidity': 0.40   # Kaiko
+            },
+            
+            # Umbral de activación de señales premium
+            'premium_signal_threshold': 0.7,
+            
+            # Configuración del modelo
+            'model': {
+                'optimization_method': 'bayesian',
+                'ensemble_levels': 3,
+                'feature_selection': True,
+                'regularization': True,
+                'save_path': 'models/adaptive'
+            },
+            
+            # Configuración de riesgo
+            'risk': {
+                'risk_per_trade': 0.01,
+                'max_portfolio_risk': 0.06,
+                'stop_loss_method': 'adaptive',
+                'take_profit_ratio': 2.0,
+                'max_positions': 3,
+                'max_daily_loss': 0.05,
+                'use_ml_risk': True,
+                'volatility_threshold': 0.05
+            },
+            
+            # Configuración de ejecución
+            'execution': {
+                'execution_method': 'adaptive',
+                'min_liquidity_score': 0.6,
+                'max_slippage': 0.002,
+                'order_split_threshold': 0.1,
+                'timing_threshold': 0.6
+            },
+            
+            # Configuración de backtesting
+            'backtest': {
+                'walk_forward': True,
+                'monte_carlo_simulations': 1000,
+                'stress_scenarios': True
+            },
+            
+            # Configuración de trading
+            'trading': {
+                'interval': 300,  # 5 minutos entre ciclos
+                'paper_trading': False
+            },
+            
+            # Configuración de logging
+            'logging': {
+                'level': 'INFO',
+                'file': 'logs/quantum_complete.log',
+                'max_size': '10MB',
+                'backup_count': 5
+            },
+            
+            # Configuración de aprendizaje adaptativo
+            'adaptive_learning': {
+                'enabled': True,
+                'drift_detection': {
+                    'method': 'ADWIN',  # Adaptive Windowing
+                    'sensitivity': 0.05,
+                    'min_window_size': 100,
+                    'max_window_size': 1000
+                },
+                'error_analysis': {
+                    'window_size': 50,
+                    'min_error_pattern': 5,
+                    'confidence_threshold': 0.8
+                },
+                'feedback_loop': {
+                    'interval_minutes': 60,
+                    'performance_threshold': 0.6,
+                    'max_adjustment_rate': 0.1
+                },
+                'reinforcement_learning': {
+                    'enabled': True,
+                    'learning_rate': 0.01,
+                    'discount_factor': 0.95,
+                    'exploration_rate': 0.2,
+                    'memory_size': 10000
+                },
+                'parameter_adaptation': {
+                    'enabled': True,
+                    'adaptation_rate': 0.05,
+                    'min_parameter_value': 0.01,
+                    'max_parameter_value': 1.0
+                }
+            },
+            
+            # Configuración de cobertura (NUEVO)
+            'hedging': {
+                'enabled': True,
+                'delta_hedging': {
+                    'enabled': True,
+                    'min_delta_threshold': 0.1,
+                    'max_delta_threshold': 0.5,
+                    'hedge_percentage': 0.5,
+                    'rebalance_frequency': 300  # segundos
+                },
+                'tail_hedging': {
+                    'enabled': True,
+                    'volatility_spike_threshold': 0.08,
+                    'correlation_threshold': 0.8,
+                    'liquidity_threshold': 0.3,
+                    'tail_hedge_percentage': 0.05,
+                    'tail_hedge_instruments': [
+                        {'symbol': 'BTC/USDT', 'type': 'future', 'side': 'sell'},
+                        {'symbol': 'ETH/USDT', 'type': 'future', 'side': 'sell'}
+                    ]
+                }
+            },
+            
+            # Configuración de correlación (NUEVO)
+            'correlation': {
+                'enabled': True,
+                'window': 30,
+                'threshold': 0.8,
+                'spike_threshold': 0.2,
+                'alert_threshold': 0.7
+            },
+            
+            # Configuración de microestructura (NUEVO)
+            'microstructure': {
+                'enabled': True,
+                'window': 100,
+                'min_order_size': 1000,
+                'optimal_timing_threshold': 0.6
+            },
+            
+            # Configuración de sizing dinámico (NUEVO)
+            'dynamic_sizing': {
+                'enabled': True,
+                'max_participation_rate': 0.05,
+                'impact_threshold': 0.002,
+                'min_order_size': 10,
+                'max_order_size': 10000
+            },
+            
+            # Configuración de feature monitoring (NUEVO)
+            'feature_monitor': {
+                'enabled': True,
+                'change_threshold': 0.2,
+                'window': 50,
+                'stability_threshold': 0.1
+            },
+            
+            # Configuración de detección de ciclos de mercado (NUEVO)
+            'market_cycle': {
+                'enabled': True,
+                'accumulation_threshold': 0.2,
+                'markup_threshold': 0.4,
+                'distribution_threshold': 0.6,
+                'markdown_threshold': 0.8,
+                'trend_period': 20,
+                'min_confidence': 0.6
+            },
+            
+            # Configuración de decisión probabilística (NUEVO)
+            'probabilistic_decision': {
+                'enabled': True,
+                'confidence_threshold': 0.6,
+                'uncertainty_penalty': 0.3,
+                'distribution_samples': 1000,
+                'position_size_adjustment': True
+            },
+            
+            # Configuración de validación temporal (NUEVO)
+            'validation': {
+                'enabled': True,
+                'method': 'walk_forward',  # walk_forward, expanding_window
+                'test_size': 0.2,
+                'n_splits': 5,
+                'gap_size': 0,
+                'initial_window_size': 0.5
+            },
+            
+            # Configuración de detección de drift (NUEVO)
+            'drift_detection': {
+                'enabled': True,
+                'method': 'ADWIN',  # ADWIN, DDM, EDDM
+                'sensitivity': 0.05,
+                'min_window_size': 100,
+                'max_window_size': 1000,
+                'retrain_threshold': 5  # Número de drifts para reentrenar
+            },
+            
+            # Configuración de regímenes extremos (NUEVO)
+            'extreme_regimes': {
+                'enabled': True,
+                'volatility_spike_threshold': 0.08,
+                'volume_spike_threshold': 3.0,
+                'price_gap_threshold': 0.05,
+                'sentiment_extreme_threshold': 0.9,
+                'whale_activity_threshold': 0.8
+            },
+            
+            # Configuración de gestión de drawdown (NUEVO)
+            'drawdown_management': {
+                'enabled': True,
+                'levels': {
+                    'level_1': {
+                        'threshold': 0.25,  # 25% drawdown
+                        'action': 'reduce_position',
+                        'factor': 0.7
+                    },
+                    'level_2': {
+                        'threshold': 0.40,  # 40% drawdown
+                        'action': 'reduce_leverage',
+                        'factor': 0.5
+                    },
+                    'level_3': {
+                        'threshold': 0.60,  # 60% drawdown
+                        'action': 'close_positions',
+                        'factor': 0.0
+                    }
+                },
+                'recovery_strategy': {
+                    'enabled': True,
+                    'min_recovery_threshold': 0.05,
+                    'recovery_increment': 0.1
+                }
+            },
+            
+            # Configuración de ensemble multi-temporal (NUEVO)
+            'multi_temporal_ensemble': {
+                'enabled': True,
+                'temporal_windows': {
+                    'short': {'window': 50, 'weight': 0.3},
+                    'medium': {'window': 200, 'weight': 0.4},
+                    'long': {'window': 500, 'weight': 0.3}
+                },
+                'adaptive_weights': True,
+                'performance_tracking': True
+            },
+            
+            # Configuración de ensemble jerárquico (NUEVO)
+            'hierarchical_ensemble': {
+                'enabled': True,
+                'layers': {
+                    'technical': {
+                        'models': ['rf', 'lr'],
+                        'weight': 0.25
+                    },
+                    'fundamental': {
+                        'models': ['gb'],
+                        'weight': 0.25
+                    },
+                    'sentiment': {
+                        'models': ['nb'],
+                        'weight': 0.25
+                    },
+                    'macro': {
+                        'models': ['lr'],
+                        'weight': 0.25
+                    }
+                },
+                'meta_model': {
+                    'type': 'rf',
+                    'weight': 0.5
+                },
+                'decision_model': {
+                    'type': 'gb',
+                    'weight': 0.5
+                }
+            },
+            
+            # Configuración de sistema de decisión multicapa (NUEVO)
+            'multilayer_decision': {
+                'enabled': True,
+                'layers': {
+                    'technical': 0.25,
+                    'fundamental': 0.25,
+                    'sentiment': 0.25,
+                    'macro': 0.25
+                },
+                'adaptive_weights': True,
+                'context_adjustment': True
+            }
+        }
+        
+        # Guardar configuración por defecto
+        with open(self.config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+        
+        print(f"Configuración por defecto creada en: {self.config_path}")
+        return config
+    
+    def update_config(self, updates: Dict[str, Any]):
+        """Actualizar configuración"""
+        self.config.update(updates)
+        
+        with open(self.config_path, 'w') as f:
+            yaml.dump(self.config, f, default_flow_style=False)
+        
+        print(f"Configuración actualizada y guardada en: {self.config_path}")
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """Obtener valor de configuración"""
+        keys = key.split('.')
+        value = self.config
+        
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                return default
+        
+        return value
+    
+    def validate_config(self) -> bool:
+        """Validar configuración"""
+        required_sections = [
+            'symbols', 'binance', 'risk', 'execution', 
+            'trading', 'logging'
+        ]
+        
+        for section in required_sections:
+            if section not in self.config:
+                self.logger.error(f"Falta sección requerida: {section}")
+                return False
+        
+        # Validar claves de API
+        if not self.config['binance'].get('api_key') or self.config['binance']['api_key'] == "TU_API_KEY":
+            self.logger.warning("API key de Binance no configurada")
+        
+        if not self.config['binance'].get('api_secret') or self.config['binance']['api_secret'] == "TU_API_SECRET":
+            self.logger.warning("API secret de Binance no configurada")
+        
+        return True
+    
+    def get_model_config(self) -> Dict[str, Any]:
+        """Obtener configuración de modelos"""
+        return {
+            'multi_temporal': self.config.get('multi_temporal_ensemble', {}),
+            'hierarchical': self.config.get('hierarchical_ensemble', {}),
+            'probabilistic': self.config.get('probabilistic_decision', {}),
+            'base': self.config.get('model', {})
+        }
+    
+    def get_risk_config(self) -> Dict[str, Any]:
+        """Obtener configuración de riesgo"""
+        return {
+            'base': self.config.get('risk', {}),
+            'drawdown': self.config.get('drawdown_management', {}),
+            'hedging': self.config.get('hedging', {})
+        }
+    
+    def get_execution_config(self) -> Dict[str, Any]:
+        """Obtener configuración de ejecución"""
+        return {
+            'base': self.config.get('execution', {}),
+            'microstructure': self.config.get('microstructure', {}),
+            'dynamic_sizing': self.config.get('dynamic_sizing', {})
+        }
+    
+    def get_analysis_config(self) -> Dict[str, Any]:
+        """Obtener configuración de análisis"""
+        return {
+            'market_cycle': self.config.get('market_cycle', {}),
+            'correlation': self.config.get('correlation', {}),
+            'extreme_regimes': self.config.get('extreme_regimes', {}),
+            'feature_monitor': self.config.get('feature_monitor', {})
+        }
+    
+    def get_validation_config(self) -> Dict[str, Any]:
+        """Obtener configuración de validación"""
+        return {
+            'temporal': self.config.get('validation', {}),
+            'drift_detection': self.config.get('drift_detection', {})
+        }
+    
+    def is_enabled(self, feature: str) -> bool:
+        """Verificar si una característica está habilitada"""
+        return self.config.get(feature, {}).get('enabled', False)
+    
+    def setup_logging(self):
+        """Configurar logging basado en configuración"""
+        import logging
+        
+        log_config = self.config.get('logging', {})
+        log_level = getattr(logging, log_config.get('level', 'INFO').upper())
+        
+        # Crear directorio de logs si no existe
+        log_file = log_config.get('file', 'logs/quantum_complete.log')
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        
+        # Configurar formato
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # Configurar handler de archivo
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=self._parse_size(log_config.get('max_size', '10MB')),
+            backupCount=log_config.get('backup_count', 5)
+        )
+        file_handler.setFormatter(formatter)
+        
+        # Configurar handler de consola
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        
+        # Configurar logger raíz
+        logger = logging.getLogger()
+        logger.setLevel(log_level)
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+        
+        return logger
+    
+    def _parse_size(self, size_str: str) -> int:
+        """Convertir tamaño de string a bytes"""
+        size_str = size_str.upper()
+        if size_str.endswith('KB'):
+            return int(size_str[:-2]) * 1024
+        elif size_str.endswith('MB'):
+            return int(size_str[:-2]) * 1024 * 1024
+        elif size_str.endswith('GB'):
+            return int(size_str[:-2]) * 1024 * 1024 * 1024
+        else:
+            return int(size_str)

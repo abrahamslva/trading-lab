@@ -1,0 +1,139 @@
+7. Sistema de Backtesting Avanzado con Walk-Forward
+
+
+class AdvancedBacktester:
+    def __init__(self):
+        self.backtest_results = {}
+        self.performance_metrics = {}
+    
+    def walk_forward_analysis(self, data, train_size=0.7, test_size=0.3):
+        """Análisis walk-forward para validar robustez"""
+        
+        total_periods = len(data)
+        train_length = int(total_periods * train_size)
+        test_length = int(total_periods * test_size)
+        
+        results = []
+        
+        for i in range(0, total_periods - train_length - test_length, test_length):
+            # Dividir datos
+            train_data = data.iloc[i:i+train_length]
+            test_data = data.iloc[i+train_length:i+train_length+test_length]
+            
+            # Entrenar modelo
+            model = self.train_model_on_period(train_data)
+            
+            # Evaluar en período de prueba
+            performance = self.evaluate_model_on_period(model, test_data)
+            
+            results.append({
+                'period': i,
+                'train_start': train_data.index[0],
+                'train_end': train_data.index[-1],
+                'test_start': test_data.index[0],
+                'test_end': test_data.index[-1],
+                'performance': performance
+            })
+        
+        return results
+    
+    def monte_carlo_simulation(self, strategy_returns, n_simulations=1000):
+        """Simulación Monte Carlo para estimar distribución de rendimientos"""
+        
+        simulation_results = []
+        
+        for _ in range(n_simulations):
+            # Muestrear con reemplazo
+            sampled_returns = np.random.choice(strategy_returns, size=len(strategy_returns), replace=True)
+            
+            # Calcular métricas para esta simulación
+            cumulative_returns = np.cumprod(1 + sampled_returns)
+            final_return = cumulative_returns[-1] - 1
+            max_drawdown = self.calculate_max_drawdown(cumulative_returns)
+            
+            simulation_results.append({
+                'final_return': final_return,
+                'max_drawdown': max_drawdown,
+                'cumulative_returns': cumulative_returns
+            })
+        
+        return simulation_results
+    
+    def calculate_max_drawdown(self, cumulative_returns):
+        """Calcular máximo drawdown"""
+        running_max = np.maximum.accumulate(cumulative_returns)
+        drawdown = (cumulative_returns - running_max) / running_max
+        return np.min(drawdown)
+    
+    def stress_testing(self, data, stress_scenarios):
+        """Pruebas de estrés con diferentes escenarios"""
+        
+        stress_results = {}
+        
+        for scenario_name, scenario_params in stress_scenarios.items():
+            # Aplicar escenario de estrés
+            stressed_data = self.apply_stress_scenario(data, scenario_params)
+            
+            # Ejecutar estrategia en datos estresados
+            stressed_performance = self.run_strategy_on_data(stressed_data)
+            
+            stress_results[scenario_name] = {
+                'scenario_params': scenario_params,
+                'performance': stressed_performance
+            }
+        
+        return stress_results
+    
+    def apply_stress_scenario(self, data, scenario_params):
+        """Aplicar escenario de estrés a los datos"""
+        stressed_data = data.copy()
+        
+        if scenario_params['type'] == 'volatility_spike':
+            # Aumentar volatilidad
+            volatility_multiplier = scenario_params.get('multiplier', 2.0)
+            returns = stressed_data['close'].pct_change()
+            stressed_returns = returns * volatility_multiplier
+            stressed_prices = (1 + stressed_returns).cumprod() * data['close'].iloc[0]
+            stressed_data['close'] = stressed_prices
+        
+        elif scenario_params['type'] == 'liquidity_crisis':
+            # Simular crisis de liquidez (aumentar spreads)
+            spread_multiplier = scenario_params.get('multiplier', 3.0)
+            stressed_data['high'] = stressed_data['close'] * (1 + spread_multiplier * 0.001)
+            stressed_data['low'] = stressed_data['close'] * (1 - spread_multiplier * 0.001)
+        
+        elif scenario_params['type'] == 'trend_reversal':
+            # Invertir tendencia
+            trend_strength = scenario_params.get('strength', 0.02)
+            trend_reversal = -np.sign(data['close'].diff()) * trend_strength
+            stressed_returns = data['close'].pct_change() + trend_reversal
+            stressed_prices = (1 + stressed_returns).cumprod() * data['close'].iloc[0]
+            stressed_data['close'] = stressed_prices
+        
+        return stressed_data
+    
+    def performance_attribution(self, strategy_returns, factor_returns):
+        """Análisis de atribución de rendimiento"""
+        
+        # Regresión para atribuir rendimiento a factores
+        from sklearn.linear_model import LinearRegression
+        
+        # Preparar datos
+        X = factor_returns.values
+        y = strategy_returns.values
+        
+        # Ajustar modelo
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Calcular atribución
+        factor_contributions = model.coef_ * factor_returns.mean()
+        
+        attribution = {
+            'factor_loadings': dict(zip(factor_returns.columns, model.coef_)),
+            'factor_contributions': dict(zip(factor_returns.columns, factor_contributions)),
+            'alpha': model.intercept_,
+            'r_squared': model.score(X, y)
+        }
+        
+        return attribution

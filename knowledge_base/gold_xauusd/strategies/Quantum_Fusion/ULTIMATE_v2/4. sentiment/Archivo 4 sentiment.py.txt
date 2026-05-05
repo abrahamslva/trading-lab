@@ -1,0 +1,828 @@
+Archivo 4: sentiment.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ANÁLISIS DE SENTIMIENTO AVANZADO - SISTEMA DE APRENDIZAJE VERDADERO
+Versión completa con todas las mejoras implementadas
+"""
+
+import os
+import re
+import time
+import json
+import logging
+import requests
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional, Union
+from textblob import TextBlob
+import tweepy
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import praw
+from newspaper import Article
+from transformers import pipeline
+import yfinance as yf
+
+class AdvancedSentimentAnalyzer:
+    """Clase para análisis avanzado de sentimiento con múltiples fuentes"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+        
+        # Inicializar analizadores de sentimiento
+        self.vader_analyzer = SentimentIntensityAnalyzer()
+        
+        # Inicializar pipeline de transformers para análisis más avanzado
+        try:
+            self.transformer_analyzer = pipeline(
+                "sentiment-analysis",
+                model="distilbert-base-uncased-finetuned-sst-2-english"
+            )
+            self.transformer_available = True
+        except Exception as e:
+            self.logger.warning(f"No se pudo cargar el modelo transformer: {e}")
+            self.transformer_available = False
+        
+        # Inicializar APIs
+        self.initialize_apis()
+        
+        # Cache de sentimiento
+        self.sentiment_cache = {}
+        self.cache_expiry = {}
+        
+        # Historial de rendimiento
+        self.sentiment_performance = {}
+        
+        # Pesos adaptativos para diferentes fuentes
+        self.source_weights = {
+            'twitter': 0.25,
+            'reddit': 0.20,
+            'news': 0.25,
+            'onchain': 0.15,
+            'technical': 0.15
+        }
+        
+        # Umbral de sentimiento extremo
+        self.extreme_sentiment_threshold = 0.8
+        
+        # Ventana para análisis temporal
+        self.temporal_window = 24  # horas
+    
+    def initialize_apis(self):
+        """Inicializar APIs para diferentes fuentes de sentimiento"""
+        try:
+            # Twitter API
+            if self.config.get('twitter', {}).get('bearer_token'):
+                self.twitter_client = tweepy.Client(
+                    bearer_token=self.config['twitter']['bearer_token']
+                )
+                self.twitter_available = True
+            else:
+                self.twitter_available = False
+                self.logger.warning("Twitter API no configurada")
+            
+            # Reddit API
+            if (self.config.get('reddit', {}).get('client_id') and 
+                self.config.get('reddit', {}).get('client_secret')):
+                self.reddit = praw.Reddit(
+                    client_id=self.config['reddit']['client_id'],
+                    client_secret=self.config['reddit']['client_secret'],
+                    user_agent=self.config['reddit'].get('user_agent', 'QuantumTrading/1.0')
+                )
+                self.reddit_available = True
+            else:
+                self.reddit_available = False
+                self.logger.warning("Reddit API no configurada")
+            
+            # News API
+            if self.config.get('news', {}).get('api_key'):
+                self.news_api_key = self.config['news']['api_key']
+                self.news_available = True
+            else:
+                self.news_available = False
+                self.logger.warning("News API no configurada")
+            
+        except Exception as e:
+            self.logger.error(f"Error inicializando APIs: {e}")
+    
+    def get_twitter_sentiment(self, query: str, count: int = 100) -> Dict:
+        """Obtener sentimiento de Twitter"""
+        try:
+            if not self.twitter_available:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Verificar cache
+            cache_key = f"twitter_{query}_{count}"
+            if self._is_cache_valid(cache_key):
+                return self.sentiment_cache[cache_key]
+            
+            # Buscar tweets
+            tweets = []
+            try:
+                response = self.twitter_client.search_recent_tweets(
+                    query=query, max_results=count, tweet_fields=["created_at", "public_metrics"]
+                )
+                
+                if response.data:
+                    for tweet in response.data:
+                        tweets.append({
+                            'text': tweet.text,
+                            'created_at': tweet.created_at,
+                            'metrics': tweet.public_metrics
+                        })
+            except Exception as e:
+                self.logger.error(f"Error buscando tweets: {e}")
+            
+            if not tweets:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Analizar sentimiento de cada tweet
+            sentiments = []
+            confidences = []
+            
+            for tweet in tweets:
+                # Limpiar texto
+                clean_text = self._clean_text(tweet['text'])
+                
+                if not clean_text:
+                    continue
+                
+                # Análisis con VADER
+                vader_scores = self.vader_analyzer.polarity_scores(clean_text)
+                vader_sentiment = vader_scores['compound']
+                
+                # Análisis con TextBlob
+                blob_sentiment = TextBlob(clean_text).sentiment.polarity
+                
+                # Análisis con transformer si está disponible
+                if self.transformer_available and len(clean_text) > 10:
+                    try:
+                        transformer_result = self.transformer_analyzer(clean_text)[0]
+                        transformer_sentiment = 1 if transformer_result['label'] == 'POSITIVE' else -1
+                        transformer_confidence = transformer_result['score']
+                    except:
+                        transformer_sentiment = 0
+                        transformer_confidence = 0.5
+                else:
+                    transformer_sentiment = 0
+                    transformer_confidence = 0.5
+                
+                # Combinar resultados
+                combined_sentiment = (
+                    vader_sentiment * 0.4 + 
+                    blob_sentiment * 0.3 + 
+                    transformer_sentiment * transformer_confidence * 0.3
+                )
+                
+                # Calcular confianza
+                confidence = max(
+                    abs(vader_sentiment),
+                    abs(blob_sentiment),
+                    transformer_confidence
+                )
+                
+                sentiments.append(combined_sentiment)
+                confidences.append(confidence)
+            
+            # Calcular sentimiento agregado
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                avg_confidence = np.mean(confidences)
+                volume = len(tweets)
+                
+                # Calcular volatilidad del sentimiento
+                sentiment_volatility = np.std(sentiments)
+                
+                # Calcular momentum del sentimiento
+                if len(sentiments) > 10:
+                    recent_sentiment = np.mean(sentiments[-10:])
+                    older_sentiment = np.mean(sentiments[:-10])
+                    sentiment_momentum = recent_sentiment - older_sentiment
+                else:
+                    sentiment_momentum = 0
+                
+                result = {
+                    'sentiment': avg_sentiment,
+                    'confidence': avg_confidence,
+                    'volume': volume,
+                    'volatility': sentiment_volatility,
+                    'momentum': sentiment_momentum,
+                    'source': 'twitter'
+                }
+                
+                # Guardar en cache
+                self._save_to_cache(cache_key, result, hours=1)
+                
+                return result
+            else:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+        
+        except Exception as e:
+            self.logger.error(f"Error obteniendo sentimiento de Twitter: {e}")
+            return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+    
+    def get_reddit_sentiment(self, subreddit: str, limit: int = 50) -> Dict:
+        """Obtener sentimiento de Reddit"""
+        try:
+            if not self.reddit_available:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Verificar cache
+            cache_key = f"reddit_{subreddit}_{limit}"
+            if self._is_cache_valid(cache_key):
+                return self.sentiment_cache[cache_key]
+            
+            # Obtener posts
+            subreddit_obj = self.reddit.subreddit(subreddit)
+            posts = []
+            
+            for post in subreddit_obj.hot(limit=limit):
+                if not post.stickied:  # Ignorar posts fijados
+                    posts.append({
+                        'title': post.title,
+                        'text': post.selftext,
+                        'score': post.score,
+                        'comments': post.num_comments,
+                        'created_at': datetime.fromtimestamp(post.created_utc)
+                    })
+            
+            if not posts:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Analizar sentimiento de títulos y contenido
+            sentiments = []
+            confidences = []
+            
+            for post in posts:
+                # Combinar título y contenido
+                text = f"{post['title']} {post['text']}"
+                clean_text = self._clean_text(text)
+                
+                if not clean_text:
+                    continue
+                
+                # Análisis con VADER
+                vader_scores = self.vader_analyzer.polarity_scores(clean_text)
+                vader_sentiment = vader_scores['compound']
+                
+                # Análisis con TextBlob
+                blob_sentiment = TextBlob(clean_text).sentiment.polarity
+                
+                # Ponderar por puntuación del post y número de comentarios
+                weight = np.log1p(post['score']) + np.log1p(post['comments'])
+                
+                # Combinar resultados
+                combined_sentiment = (vader_sentiment + blob_sentiment) / 2
+                
+                sentiments.append(combined_sentiment)
+                confidences.append(abs(combined_sentiment))
+            
+            # Calcular sentimiento agregado
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                avg_confidence = np.mean(confidences)
+                volume = len(posts)
+                
+                # Calcular volatilidad del sentimiento
+                sentiment_volatility = np.std(sentiments)
+                
+                # Calcular momentum del sentimiento
+                if len(sentiments) > 10:
+                    recent_sentiment = np.mean(sentiments[-10:])
+                    older_sentiment = np.mean(sentiments[:-10])
+                    sentiment_momentum = recent_sentiment - older_sentiment
+                else:
+                    sentiment_momentum = 0
+                
+                result = {
+                    'sentiment': avg_sentiment,
+                    'confidence': avg_confidence,
+                    'volume': volume,
+                    'volatility': sentiment_volatility,
+                    'momentum': sentiment_momentum,
+                    'source': 'reddit'
+                }
+                
+                # Guardar en cache
+                self._save_to_cache(cache_key, result, hours=2)
+                
+                return result
+            else:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+        
+        except Exception as e:
+            self.logger.error(f"Error obteniendo sentimiento de Reddit: {e}")
+            return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+    
+    def get_news_sentiment(self, query: str, days: int = 3) -> Dict:
+        """Obtener sentimiento de noticias"""
+        try:
+            if not self.news_available:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Verificar cache
+            cache_key = f"news_{query}_{days}"
+            if self._is_cache_valid(cache_key):
+                return self.sentiment_cache[cache_key]
+            
+            # Obtener noticias
+            url = f"https://newsapi.org/v2/everything"
+            params = {
+                'q': query,
+                'language': 'en',
+                'sortBy': 'relevancy',
+                'pageSize': 50,
+                'from': (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d'),
+                'to': datetime.now().strftime('%Y-%m-%d'),
+                'apiKey': self.news_api_key
+            }
+            
+            response = requests.get(url, params=params)
+            articles = response.json().get('articles', [])
+            
+            if not articles:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Analizar sentimiento de cada artículo
+            sentiments = []
+            confidences = []
+            
+            for article in articles:
+                # Extraer título y descripción
+                title = article.get('title', '')
+                description = article.get('description', '')
+                
+                # Combinar título y descripción
+                text = f"{title} {description}"
+                clean_text = self._clean_text(text)
+                
+                if not clean_text:
+                    continue
+                
+                # Análisis con VADER
+                vader_scores = self.vader_analyzer.polarity_scores(clean_text)
+                vader_sentiment = vader_scores['compound']
+                
+                # Análisis con TextBlob
+                blob_sentiment = TextBlob(clean_text).sentiment.polarity
+                
+                # Combinar resultados
+                combined_sentiment = (vader_sentiment + blob_sentiment) / 2
+                
+                sentiments.append(combined_sentiment)
+                confidences.append(abs(combined_sentiment))
+            
+            # Calcular sentimiento agregado
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                avg_confidence = np.mean(confidences)
+                volume = len(articles)
+                
+                # Calcular volatilidad del sentimiento
+                sentiment_volatility = np.std(sentiments)
+                
+                # Calcular momentum del sentimiento
+                if len(sentiments) > 10:
+                    recent_sentiment = np.mean(sentiments[-10:])
+                    older_sentiment = np.mean(sentiments[:-10])
+                    sentiment_momentum = recent_sentiment - older_sentiment
+                else:
+                    sentiment_momentum = 0
+                
+                result = {
+                    'sentiment': avg_sentiment,
+                    'confidence': avg_confidence,
+                    'volume': volume,
+                    'volatility': sentiment_volatility,
+                    'momentum': sentiment_momentum,
+                    'source': 'news'
+                }
+                
+                # Guardar en cache
+                self._save_to_cache(cache_key, result, hours=3)
+                
+                return result
+            else:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+        
+        except Exception as e:
+            self.logger.error(f"Error obteniendo sentimiento de noticias: {e}")
+            return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+    
+    def get_onchain_sentiment(self, symbol: str) -> Dict:
+        """Obtener sentimiento basado en datos on-chain"""
+        try:
+            # Verificar cache
+            cache_key = f"onchain_{symbol}"
+            if self._is_cache_valid(cache_key):
+                return self.sentiment_cache[cache_key]
+            
+            # Mapear símbolo a ID de blockchain
+            symbol_mapping = {
+                'BTC/USDT': 'bitcoin',
+                'ETH/USDT': 'ethereum',
+                'BNB/USDT': 'binancecoin'
+            }
+            
+            blockchain_id = symbol_mapping.get(symbol, '').lower()
+            if not blockchain_id:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Obtener datos on-chain usando yfinance (simplificado)
+            try:
+                ticker = yf.Ticker(f"{blockchain_id}-USD")
+                hist = ticker.history(period="7d")
+                
+                if hist.empty:
+                    return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+                
+                # Calcular indicadores on-chain simplificados
+                # Volumen de transacciones
+                volume_trend = hist['Volume'].pct_change().mean()
+                
+                # Volatilidad del precio
+                price_volatility = hist['Close'].pct_change().std()
+                
+                # Tendencia del precio
+                price_trend = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]
+                
+                # Combinar en sentimiento on-chain
+                # Alto volumen y tendencia positiva = sentimiento positivo
+                # Alta volatilidad = sentimiento negativo
+                onchain_sentiment = (
+                    volume_trend * 0.3 + 
+                    price_trend * 0.5 - 
+                    price_volatility * 0.2
+                )
+                
+                # Normalizar a [-1, 1]
+                onchain_sentiment = max(-1, min(1, onchain_sentiment * 10))
+                
+                # Calcular confianza basada en la consistencia de los indicadores
+                confidence = 1 - price_volatility * 5  # Menor volatilidad = mayor confianza
+                confidence = max(0.3, min(1, confidence))
+                
+                result = {
+                    'sentiment': onchain_sentiment,
+                    'confidence': confidence,
+                    'volume': hist['Volume'].mean(),
+                    'volatility': price_volatility,
+                    'momentum': price_trend,
+                    'source': 'onchain'
+                }
+                
+                # Guardar en cache
+                self._save_to_cache(cache_key, result, hours=6)
+                
+                return result
+                
+            except Exception as e:
+                self.logger.error(f"Error obteniendo datos on-chain: {e}")
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+        
+        except Exception as e:
+            self.logger.error(f"Error obteniendo sentimiento on-chain: {e}")
+            return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+    
+    def get_technical_sentiment(self, symbol: str) -> Dict:
+        """Obtener sentimiento basado en indicadores técnicos"""
+        try:
+            # Verificar cache
+            cache_key = f"technical_{symbol}"
+            if self._is_cache_valid(cache_key):
+                return self.sentiment_cache[cache_key]
+            
+            # Obtener datos históricos
+            ticker = yf.Ticker(symbol.replace('/USDT', '-USD'))
+            hist = ticker.history(period="30d")
+            
+            if hist.empty or len(hist) < 20:
+                return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+            
+            # Calcular indicadores técnicos
+            close_prices = hist['Close']
+            
+            # RSI
+            delta = close_prices.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            current_rsi = rsi.iloc[-1]
+            
+            # Medias móviles
+            ma_20 = close_prices.rolling(window=20).mean().iloc[-1]
+            ma_50 = close_prices.rolling(window=50).mean().iloc[-1]
+            current_price = close_prices.iloc[-1]
+            
+            # MACD
+            ema_12 = close_prices.ewm(span=12).mean()
+            ema_26 = close_prices.ewm(span=26).mean()
+            macd = ema_12 - ema_26
+            signal = macd.ewm(span=9).mean()
+            macd_histogram = macd - signal
+            current_macd = macd_histogram.iloc[-1]
+            
+            # Calcular sentimiento técnico
+            technical_sentiment = 0
+            
+            # RSI: sobreventa (<30) = positivo, sobrecompra (>70) = negativo
+            if current_rsi < 30:
+                technical_sentiment += 0.3
+            elif current_rsi > 70:
+                technical_sentiment -= 0.3
+            
+            # Medias móviles: precio por encima de ambas = positivo
+            if current_price > ma_20 > ma_50:
+                technical_sentiment += 0.3
+            elif current_price < ma_20 < ma_50:
+                technical_sentiment -= 0.3
+            
+            # MACD: histograma positivo = positivo
+            if current_macd > 0:
+                technical_sentiment += 0.2
+            else:
+                technical_sentiment -= 0.2
+            
+            # Normalizar a [-1, 1]
+            technical_sentiment = max(-1, min(1, technical_sentiment))
+            
+            # Calcular confianza basada en la consistencia de las señales
+            rsi_signal = 1 if current_rsi < 30 or current_rsi > 70 else 0
+            ma_signal = 1 if (current_price > ma_20 > ma_50) or (current_price < ma_20 < ma_50) else 0
+            macd_signal = 1 if abs(current_macd) > 0.01 else 0
+            
+            signal_consistency = (rsi_signal + ma_signal + macd_signal) / 3
+            confidence = 0.5 + signal_consistency * 0.5
+            
+            result = {
+                'sentiment': technical_sentiment,
+                'confidence': confidence,
+                'volume': hist['Volume'].mean(),
+                'rsi': current_rsi,
+                'ma_signal': ma_signal,
+                'macd_signal': macd_signal,
+                'source': 'technical'
+            }
+            
+            # Guardar en cache
+            self._save_to_cache(cache_key, result, hours=4)
+            
+            return result
+        
+        except Exception as e:
+            self.logger.error(f"Error obteniendo sentimiento técnico: {e}")
+            return {'sentiment': 0, 'confidence': 0, 'volume': 0}
+    
+    def aggregate_sentiment(self, sentiment_sources: List[Dict]) -> pd.DataFrame:
+        """Agrega múltiples fuentes de sentimiento en un DataFrame"""
+        try:
+            if not sentiment_sources:
+                return pd.DataFrame({
+                    'sentiment': [0],
+                    'sentiment_volatility': [0],
+                    'sentiment_momentum': [0]
+                })
+            
+            # Filtrar fuentes válidas
+            valid_sources = [s for s in sentiment_sources if s.get('volume', 0) > 0]
+            
+            if not valid_sources:
+                return pd.DataFrame({
+                    'sentiment': [0],
+                    'sentiment_volatility': [0],
+                    'sentiment_momentum': [0]
+                })
+            
+            # Ajustar pesos según disponibilidad y confianza
+            total_weight = 0
+            weighted_sentiment = 0
+            weighted_volatility = 0
+            weighted_momentum = 0
+            
+            for source in valid_sources:
+                source_name = source.get('source', 'unknown')
+                weight = self.source_weights.get(source_name, 0.1)
+                confidence = source.get('confidence', 0.5)
+                volume = source.get('volume', 1)
+                
+                # Ajustar peso por confianza y volumen
+                adjusted_weight = weight * confidence * np.log1p(volume)
+                total_weight += adjusted_weight
+                
+                weighted_sentiment += source.get('sentiment', 0) * adjusted_weight
+                weighted_volatility += source.get('volatility', 0) * adjusted_weight
+                weighted_momentum += source.get('momentum', 0) * adjusted_weight
+            
+            # Normalizar si hay pesos
+            if total_weight > 0:
+                final_sentiment = weighted_sentiment / total_weight
+                final_volatility = weighted_volatility / total_weight
+                final_momentum = weighted_momentum / total_weight
+            else:
+                final_sentiment = 0
+                final_volatility = 0
+                final_momentum = 0
+            
+            # Detectar sentimiento extremo
+            is_extreme = abs(final_sentiment) > self.extreme_sentiment_threshold
+            
+            # Crear DataFrame con todos los indicadores
+            result_df = pd.DataFrame({
+                'sentiment': [final_sentiment],
+                'sentiment_volatility': [final_volatility],
+                'sentiment_momentum': [final_momentum],
+                'sentiment_extreme': [1 if is_extreme else 0],
+                'sentiment_sources_count': [len(valid_sources)]
+            })
+            
+            # Agregar detalles de cada fuente si están disponibles
+            for source in valid_sources:
+                source_name = source.get('source', 'unknown')
+                result_df[f'sentiment_{source_name}'] = source.get('sentiment', 0)
+                result_df[f'confidence_{source_name}'] = source.get('confidence', 0)
+            
+            return result_df
+        
+        except Exception as e:
+            self.logger.error(f"Error agregando sentimiento: {e}")
+            return pd.DataFrame({
+                'sentiment': [0],
+                'sentiment_volatility': [0],
+                'sentiment_momentum': [0]
+            })
+    
+    def update_sentiment_performance(self, symbol: str, actual_return: float):
+        """Actualizar el rendimiento del análisis de sentimiento"""
+        try:
+            if symbol not in self.sentiment_performance:
+                self.sentiment_performance[symbol] = []
+            
+            # Obtener sentimiento más reciente
+            sentiment_sources = [
+                self.get_twitter_sentiment(symbol.split('/')[0], count=50),
+                self.get_reddit_sentiment('CryptoCurrency', limit=25),
+                self.get_news_sentiment(symbol.split('/')[0], days=1),
+                self.get_onchain_sentiment(symbol),
+                self.get_technical_sentiment(symbol)
+            ]
+            
+            sentiment_df = self.aggregate_sentiment(sentiment_sources)
+            predicted_sentiment = sentiment_df['sentiment'].iloc[0]
+            
+            # Calcular acierto
+            correct = 1 if (predicted_sentiment > 0 and actual_return > 0) or \
+                          (predicted_sentiment <= 0 and actual_return <= 0) else 0
+            
+            # Guardar rendimiento
+            performance_record = {
+                'timestamp': datetime.now(),
+                'predicted_sentiment': predicted_sentiment,
+                'actual_return': actual_return,
+                'correct': correct
+            }
+            
+            self.sentiment_performance[symbol].append(performance_record)
+            
+            # Limitar historial
+            if len(self.sentiment_performance[symbol]) > 100:
+                self.sentiment_performance[symbol] = self.sentiment_performance[symbol][-100:]
+            
+            # Ajustar pesos según rendimiento
+            self._adjust_source_weights(symbol)
+            
+        except Exception as e:
+            self.logger.error(f"Error actualizando rendimiento de sentimiento: {e}")
+    
+    def _adjust_source_weights(self, symbol: str):
+        """Ajustar pesos de fuentes según rendimiento reciente"""
+        try:
+            if symbol not in self.sentiment_performance or len(self.sentiment_performance[symbol]) < 10:
+                return
+            
+            recent_performance = self.sentiment_performance[symbol][-20:]
+            
+            # Calcular precisión de cada fuente
+            source_accuracy = {}
+            
+            for record in recent_performance:
+                timestamp = record['timestamp']
+                
+                # Para cada fuente, obtener el sentimiento en ese momento
+                # (Esta es una simplificación, en una implementación real
+                # necesitaríamos guardar el sentimiento de cada fuente)
+            
+            # Ajustar pesos basados en precisión
+            # (Esta es una simplificación)
+            
+        except Exception as e:
+            self.logger.error(f"Error ajustando pesos de fuentes: {e}")
+    
+    def _clean_text(self, text: str) -> str:
+        """Limpiar texto para análisis de sentimiento"""
+        try:
+            # Eliminar URLs
+            text = re.sub(r'https?://\S+|www\.\S+', '', text)
+            
+            # Eliminar menciones y hashtags
+            text = re.sub(r'@\w+|#\w+', '', text)
+            
+            # Eliminar caracteres especiales y números
+            text = re.sub(r'[^a-zA-Z\s]', '', text)
+            
+            # Convertir a minúsculas
+            text = text.lower()
+            
+            # Eliminar espacios extra
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            return text
+        
+        except Exception as e:
+            self.logger.error(f"Error limpiando texto: {e}")
+            return ""
+    
+    def _is_cache_valid(self, key: str) -> bool:
+        """Verificar si un elemento en cache es válido"""
+        try:
+            if key not in self.sentiment_cache:
+                return False
+            
+            if key not in self.cache_expiry:
+                return False
+            
+            return datetime.now() < self.cache_expiry[key]
+        
+        except Exception as e:
+            self.logger.error(f"Error verificando cache: {e}")
+            return False
+    
+    def _save_to_cache(self, key: str, data: Dict, hours: int = 1):
+        """Guardar datos en cache"""
+        try:
+            self.sentiment_cache[key] = data
+            self.cache_expiry[key] = datetime.now() + timedelta(hours=hours)
+        
+        except Exception as e:
+            self.logger.error(f"Error guardando en cache: {e}")
+    
+    def get_sentiment_report(self, symbol: str) -> str:
+        """Generar reporte de sentimiento para un símbolo"""
+        try:
+            # Obtener sentimiento de todas las fuentes
+            twitter_sentiment = self.get_twitter_sentiment(symbol.split('/')[0], count=100)
+            reddit_sentiment = self.get_reddit_sentiment('CryptoCurrency', limit=50)
+            news_sentiment = self.get_news_sentiment(symbol.split('/')[0], days=3)
+            onchain_sentiment = self.get_onchain_sentiment(symbol)
+            technical_sentiment = self.get_technical_sentiment(symbol)
+            
+            # Agregar sentimiento
+            all_sentiments = [twitter_sentiment, reddit_sentiment, news_sentiment, 
+                             onchain_sentiment, technical_sentiment]
+            aggregated_sentiment = self.aggregate_sentiment(all_sentiments)
+            
+            # Generar reporte
+            report = f"""
+=== REPORTE DE SENTIMIENTO PARA {symbol} ===
+
+Sentimiento Agregado: {aggregated_sentiment['sentiment'].iloc[0]:.3f}
+Volatilidad de Sentimiento: {aggregated_sentiment['sentiment_volatility'].iloc[0]:.3f}
+Momentum de Sentimiento: {aggregated_sentiment['sentiment_momentum'].iloc[0]:.3f}
+Sentimiento Extremo: {'Sí' if aggregated_sentiment['sentiment_extreme'].iloc[0] else 'No'}
+
+=== DETALLES POR FUENTE ===
+
+Twitter:
+  Sentimiento: {twitter_sentiment.get('sentiment', 0):.3f}
+  Confianza: {twitter_sentiment.get('confidence', 0):.3f}
+  Volumen: {twitter_sentiment.get('volume', 0)}
+
+Reddit:
+  Sentimiento: {reddit_sentiment.get('sentiment', 0):.3f}
+  Confianza: {reddit_sentiment.get('confidence', 0):.3f}
+  Volumen: {reddit_sentiment.get('volume', 0)}
+
+Noticias:
+  Sentimiento: {news_sentiment.get('sentiment', 0):.3f}
+  Confianza: {news_sentiment.get('confidence', 0):.3f}
+  Volumen: {news_sentiment.get('volume', 0)}
+
+On-Chain:
+  Sentimiento: {onchain_sentiment.get('sentiment', 0):.3f}
+  Confianza: {onchain_sentiment.get('confidence', 0):.3f}
+  Volumen: {onchain_sentiment.get('volume', 0):.3f}
+
+Técnico:
+  Sentimiento: {technical_sentiment.get('sentiment', 0):.3f}
+  Confianza: {technical_sentiment.get('confidence', 0):.3f}
+  RSI: {technical_sentiment.get('rsi', 50):.1f}
+"""
+            
+            return report
+        
+        except Exception as e:
+            self.logger.error(f"Error generando reporte de sentimiento: {e}")
+            return f"Error generando reporte de sentimiento: {e}"

@@ -1,0 +1,1388 @@
+# =============================================================================
+# TRADINGVIEW — Pine Script v6 (mismas reglas que pediste: Cipher B, solo LONG,
+# entradas en punto DORADO, offset visual -2, SL/TP 2:1 con SL% optimizable,
+# capital backtest 25k). Copiar/pegar en el editor Pine de TradingView.
+# (El mismo código está en paralelo en "Cypher Hybrid Pine.txt".)
+# =============================================================================
+_PINE_CIPHER_B_LONG_ONLY_V6 = r"""
+//@version=6
+strategy("Cipher B Dots (Long Only)", overlay=false, shorttitle="CYB-LONG",
+     initial_capital=25000, default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.0,
+     slippage=1, currency=currency.USD, process_orders_on_close=true)
+
+// ======================
+// 1) INPUTS (solo lo necesario)
+// ======================
+group_wt = "WaveTrend"
+wtChannelLen = input.int(9, "WT Channel Length", minval=1, group=group_wt)
+wtAverageLen = input.int(12, "WT Average Length", minval=1, group=group_wt)
+wtMALen = input.int(3, "WT MA Length", minval=1, group=group_wt)
+wtMASource = input.source(hlc3, "WT MA Source", group=group_wt)
+
+obLevel = input.int(53, "WT Overbought Level 1", group=group_wt)
+osLevel = input.int(-53, "WT Oversold Level 1", group=group_wt)
+osLevel3 = input.int(-75, "WT Oversold Level 3", group=group_wt)
+
+group_rsi = "RSI"
+rsiLen = input.int(14, "RSI Length", minval=1, group=group_rsi)
+rsiSRC = input.source(close, "RSI Source", group=group_rsi)
+
+group_div = "Divergencias"
+wtDivOSLevel = input.int(-65, "WT Bullish Divergence min", group=group_div)
+rsiDivOSLevel = input.int(30, "RSI Bullish Divergence min", group=group_div)
+
+group_rm = "Risk Management"
+sl_pct = input.float(1.0, "SL % (optimizable)", minval=0.1, maxval=10.0, step=0.1, group=group_rm) * 0.01
+rr = input.float(2.0, "R:R (TP = SL * RR)", minval=1.0, maxval=5.0, step=0.1, group=group_rm)
+risk_per_trade = input.float(1.0, "Risk per Trade %", minval=0.1, maxval=5.0, step=0.1, group=group_rm) * 0.01
+leverage = input.int(1, "Apalancamiento (cálculo)", minval=1, maxval=10, group=group_rm)
+
+// ======================
+// 2) FUNCIONES (portadas del PDF, Pine v6)
+// ======================
+f_top_fractal(series float src) =>
+    src[4] < src[2] and src[3] < src[2] and src[2] > src[1] and src[2] > src[0]
+
+f_bot_fractal(series float src) =>
+    src[4] > src[2] and src[3] > src[2] and src[2] < src[1] and src[2] < src[0]
+
+f_fractalize(series float src) =>
+    f_top_fractal(src) ? 1 : f_bot_fractal(src) ? -1 : 0
+
+f_findDivs(series float src, float topLimit, float botLimit, bool useLimits) =>
+    fractalTop = f_fractalize(src) > 0 and (useLimits ? src[2] >= topLimit : true) ? src[2] : na
+    fractalBot = f_fractalize(src) < 0 and (useLimits ? src[2] <= botLimit : true) ? src[2] : na
+
+    highPrev = ta.valuewhen(not na(fractalTop), src[2], 0)[2]
+    highPrice = ta.valuewhen(not na(fractalTop), high[2], 0)[2]
+    lowPrev = ta.valuewhen(not na(fractalBot), src[2], 0)[2]
+    lowPrice = ta.valuewhen(not na(fractalBot), low[2], 0)[2]
+
+    bearSignal = (not na(fractalTop)) and high[2] > highPrice and src[2] < highPrev
+    bullSignal = (not na(fractalBot)) and low[2] < lowPrice and src[2] > lowPrev
+
+    bearDivHidden = (not na(fractalTop)) and high[2] < highPrice and src[2] > highPrev
+    bullDivHidden = (not na(fractalBot)) and low[2] > lowPrice and src[2] < lowPrev
+
+    [fractalTop, fractalBot, lowPrev, bearSignal, bullSignal, bearDivHidden, bullDivHidden]
+
+f_wavetrend(series float src, int chlen, int avg, int malen) =>
+    esa = ta.ema(src, chlen)
+    de = ta.ema(math.abs(src - esa), chlen)
+    ci = (src - esa) / (0.015 * de)
+    wt1 = ta.ema(ci, avg)
+    wt2 = ta.sma(wt1, malen)
+    wtOversold = wt2 <= osLevel
+    wtOverbought = wt2 >= obLevel
+    wtCross = ta.cross(wt1, wt2)
+    wtCrossUp = wt2 - wt1 <= 0
+    wtCrossDown = wt2 - wt1 >= 0
+    [wt1, wt2, wtOversold, wtOverbought, wtCross, wtCrossUp, wtCrossDown]
+
+// ======================
+// 3) CÁLCULOS
+// ======================
+rsi = ta.rsi(rsiSRC, rsiLen)
+[wt1, wt2, wtOversold, wtOverbought, wtCross, wtCrossUp, wtCrossDown] = f_wavetrend(wtMASource, wtChannelLen, wtAverageLen, wtMALen)
+
+// Divergencias WT y RSI (solo bullish)
+[wtFractalTop, wtFractalBot, wtLow_prev, wtBearDiv, wtBullDiv, wtBearDivHidden, wtBullDivHidden] = f_findDivs(wt2, 45, wtDivOSLevel, true)
+[rsiFractalTop, rsiFractalBot, rsiLow_prev, rsiBearDiv, rsiBullDiv, rsiBearDivHidden, rsiBullDivHidden] = f_findDivs(rsi, 60, rsiDivOSLevel, true)
+
+// Punto verde (del PDF): wtCross & CrossUp & Oversold
+green_dot = wtCross and wtCrossUp and wtOversold
+
+// Punto dorado (del PDF): divergencia bullish + condiciones WT/RSI adicionales
+lastRsi = ta.valuewhen(not na(wtFractalBot), rsi[2], 0)[2]
+gold_dot = ((wtBullDiv) or (rsiBullDiv)) and
+    (wtLow_prev <= osLevel3) and
+    (wt2 > osLevel3) and
+    (wtLow_prev - wt2 <= -5) and
+    (lastRsi < 30)
+
+buy_signal = gold_dot
+
+plotshape(green_dot, title="Punto Verde (solo visual)", style=shape.circle, size=size.tiny, color=color.new(color.lime, 0), location=location.bottom)
+plotshape(gold_dot, title="Punto Dorado", style=shape.circle, size=size.tiny, color=color.new(color.gold, 0), location=location.bottom, offset=-2)
+
+// ======================
+// 4) EJECUCIÓN LONG ONLY (entrada al cierre)
+// ======================
+sl_distance = close * sl_pct
+qty = sl_distance > 0 ? (strategy.equity * risk_per_trade) / sl_distance * leverage : 0.0
+
+if buy_signal and strategy.position_size <= 0
+    strategy.entry("Long", strategy.long, qty=qty)
+
+if strategy.position_size > 0
+    long_stop = strategy.position_avg_price * (1 - sl_pct)
+    long_limit = strategy.position_avg_price * (1 + sl_pct * rr)
+    strategy.exit("Long-Exit", "Long", stop=long_stop, limit=long_limit)
+
+// Alertas (const string)
+alertcondition(green_dot, title="GREEN DOT", message="Punto verde")
+alertcondition(gold_dot, title="GOLD DOT", message="Punto dorado")
+"""
+
+import ccxt
+import pandas as pd
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from scipy.signal import argrelextrema
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
+from ta.volume import VolumeWeightedAveragePrice
+from datetime import datetime, timedelta
+import json
+import os
+import yfinance as yf
+from pycoingecko import CoinGeckoAPI
+
+# =============================================
+# CONFIGURACIÓN - CAMBIA SOLO ESTA SECCIÓN
+# =============================================
+
+# Configuración de API (para trading real)
+api_key = 'PEGA_TU_API_KEY_DE_BITGET_AQUI'  # Tu API Key de Bitget
+api_secret = 'PEGA_TU_API_SECRET_DE_BITGET_AQUI'  # Tu API Secret de Bitget
+
+# Configuración de trading
+symbol = 'BTC/USDT'  # Símbolo de trading (Bitcoin en Tether)
+timeframe = '1h'  # Timeframe: '1h', '2h', '3h', '4h', '1d'
+capital_inicial = 100000  # Capital inicial en pesos mexicanos (equivalente)
+risk_per_trade = 0.02  # Riesgo por trade (2% del capital)
+leverage = 1  # Apalancamiento (1 = sin apalancamiento)
+
+# Configuración del patrón Cypher (según el video)
+zigzag_depth = 5  # Profundidad del ZigZag (ajustada para temporalidades más bajas)
+fib_tolerance = 0.02  # Tolerancia más estricta para las relaciones de Fibonacci (2%)
+
+# Configuración de backtesting
+backtesting = True  # True para backtesting, False para trading real
+start_date = '2023-01-01'  # Fecha de inicio para backtesting
+end_date = datetime.now().strftime('%Y-%m-%d')  # Fecha de fin (hoy)
+
+# Configuración de confirmación técnica (según el video)
+use_rsi_confirmation = True  # Usar confirmación RSI
+rsi_oversold = 30  # Nivel de sobreventa para patrones alcistas
+rsi_overbought = 70  # Nivel de sobrecompra para patrones bajistas
+
+use_macd_confirmation = True  # Usar confirmación MACD
+use_volume_confirmation = True  # Usar confirmación de volumen
+
+# Configuración de fuentes de datos
+primary_data_source = 'ccxt'  # 'ccxt' o 'yfinance'
+use_fundamental_data = True  # Usar datos fundamentales de CoinGecko
+
+# Configuración de visualización
+show_detailed_charts = True  # Mostrar gráficos detallados
+save_interactive_charts = True  # Guardar gráficos interactivos
+
+# =============================================
+# NO CAMBIAR NADA A PARTIR DE AQUÍ
+# =============================================
+
+class DataProvider:
+    """Clase para obtener datos de múltiples fuentes"""
+    
+    def __init__(self, api_key=None, api_secret=None):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        
+        # Inicializar exchanges
+        self.exchange = None
+        if api_key and api_secret:
+            try:
+                self.exchange = ccxt.bitget({
+                    'apiKey': api_key,
+                    'secret': api_secret,
+                    'enableRateLimit': True,
+                })
+                self.log("Conectado a Bitget")
+            except Exception as e:
+                self.log(f"Error al conectar a Bitget: {e}")
+        
+        # Inicializar CoinGecko
+        self.coingecko = CoinGeckoAPI() if use_fundamental_data else None
+        
+    def log(self, message):
+        """Registrar mensaje"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] {message}")
+    
+    def get_historical_data_ccxt(self, symbol, days=365):
+        """Obtener datos históricos usando CCXT"""
+        if not self.exchange:
+            self.log("Exchange no configurado")
+            return None
+            
+        try:
+            # Calcular timestamp de inicio
+            since = self.exchange.parse8601((datetime.now() - timedelta(days=days)).isoformat())
+            
+            # Obtener velas
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=5000)
+            
+            # Convertir a DataFrame
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            self.log(f"Datos obtenidos de CCXT: {len(df)} registros")
+            return df
+            
+        except Exception as e:
+            self.log(f"Error al obtener datos de CCXT: {e}")
+            return None
+    
+    def get_historical_data_yfinance(self, symbol, days=365):
+        """Obtener datos históricos usando yfinance"""
+        try:
+            # Convertir símbolo de CCXT a yfinance
+            yf_symbol = symbol.replace('/USDT', '-USD')
+            
+            # Obtener datos
+            data = yf.download(yf_symbol, start=datetime.now() - timedelta(days=days), end=datetime.now(), interval='1h')
+            
+            self.log(f"Datos obtenidos de yfinance: {len(data)} registros")
+            return data
+            
+        except Exception as e:
+            self.log(f"Error al obtener datos de yfinance: {e}")
+            return None
+    
+    def get_fundamental_data(self, coin_id='bitcoin'):
+        """Obtener datos fundamentales de CoinGecko"""
+        if not self.coingecko:
+            return None
+            
+        try:
+            # Obtener datos fundamentales
+            coin_data = self.coingecko.get_coin_by_id(coin_id)
+            
+            fundamental_data = {
+                'market_cap': coin_data['market_data']['market_cap']['usd'],
+                'total_volume': coin_data['market_data']['total_volume']['usd'],
+                'price_change_24h': coin_data['market_data']['price_change_percentage_24h'],
+                'price_change_7d': coin_data['market_data']['price_change_percentage_7d'],
+                'github_stars': coin_data['developer_data']['stars'],
+                'reddit_subscribers': coin_data['community_data']['reddit_subscribers']
+            }
+            
+            self.log(f"Datos fundamentales obtenidos de CoinGecko para {coin_id}")
+            return fundamental_data
+            
+        except Exception as e:
+            self.log(f"Error al obtener datos fundamentales: {e}")
+            return None
+    
+    def get_data(self, symbol, days=365):
+        """Obtener datos usando la fuente primaria con respaldo"""
+        data = None
+        
+        # Intentar con fuente primaria
+        if primary_data_source == 'ccxt':
+            data = self.get_historical_data_ccxt(symbol, days)
+            if data is None:
+                self.log("Fallback a yfinance")
+                data = self.get_historical_data_yfinance(symbol, days)
+        else:
+            data = self.get_historical_data_yfinance(symbol, days)
+            if data is None:
+                self.log("Fallback a CCXT")
+                data = self.get_historical_data_ccxt(symbol, days)
+        
+        return data
+
+class CypherPatternDetector:
+    def __init__(self, data, zigzag_depth=5, fib_tolerance=0.02):
+        """
+        Inicializa el detector de patrones Cypher según el video
+        
+        Args:
+            data: DataFrame con columnas 'date', 'open', 'high', 'low', 'close', 'volume'
+            zigzag_depth: Profundidad del ZigZag
+            fib_tolerance: Tolerancia para las relaciones de Fibonacci
+        """
+        self.data = data.copy()
+        self.zigzag_depth = zigzag_depth
+        self.fib_tolerance = fib_tolerance
+        self.patterns = []
+        
+    def find_pivots(self):
+        """Encuentra los puntos pivote en los datos"""
+        highs = self.data['high'].values
+        lows = self.data['low'].values
+        
+        # Encontrar máximos y mínimos locales
+        high_idx = argrelextrema(highs, np.greater, order=self.zigzag_depth)[0]
+        low_idx = argrelextrema(lows, np.less, order=self.zigzag_depth)[0]
+        
+        return high_idx, low_idx
+    
+    def calculate_fibonacci_relationships(self, points):
+        """
+        Calcula las relaciones de Fibonacci para un conjunto de puntos según el video
+        
+        Args:
+            points: Lista de precios [X, A, B, C, D]
+            
+        Returns:
+            dict: Diccionario con las relaciones de Fibonacci
+        """
+        X, A, B, C, D = points
+        
+        # Calcular movimientos
+        XA = abs(A - X)
+        AB = abs(B - A)
+        BC = abs(C - B)
+        CD = abs(D - C)
+        XC = abs(C - X)
+        
+        # Calcular relaciones Fibonacci según el video
+        AB_retro_XA = AB / XA if XA != 0 else 0
+        BC_ext_AB = BC / AB if AB != 0 else 0
+        CD_retro_XC = CD / XC if XC != 0 else 0
+        
+        # También calcular BC_ext_XA para validación adicional
+        BC_ext_XA = BC / XA if XA != 0 else 0
+        
+        return {
+            'AB_retro_XA': AB_retro_XA,
+            'BC_ext_AB': BC_ext_AB,
+            'CD_retro_XC': CD_retro_XC,
+            'BC_ext_XA': BC_ext_XA,
+            'XA': XA,
+            'AB': AB,
+            'BC': BC,
+            'CD': CD,
+            'XC': XC
+        }
+    
+    def is_cypher_pattern(self, fib_relations):
+        """
+        Verifica si las relaciones de Fibonacci corresponden a un patrón Cypher según el video
+        
+        Args:
+            fib_relations: Diccionario con las relaciones de Fibonacci
+            
+        Returns:
+            bool: True si es un patrón Cypher válido
+        """
+        # Reglas del patrón Cypher (según el video y las imágenes)
+        
+        # Regla 1: AB debe ser retroceso de 38.2% a 61.8% de XA
+        rule1 = (0.382 - self.fib_tolerance) <= fib_relations['AB_retro_XA'] <= (0.618 + self.fib_tolerance)
+        
+        # Regla 2: BC debe ser extensión de 113.0% a 141.4% de AB
+        # O alternativamente: BC debe ser extensión de 127.2% a 141.4% de XA
+        rule2a = (1.130 - self.fib_tolerance) <= fib_relations['BC_ext_AB'] <= (1.414 + self.fib_tolerance)
+        rule2b = (1.272 - self.fib_tolerance) <= fib_relations['BC_ext_XA'] <= (1.414 + self.fib_tolerance)
+        rule2 = rule2a or rule2b
+        
+        # Regla 3: CD debe ser retroceso de 78.6% de XC
+        rule3 = (0.786 - self.fib_tolerance) <= fib_relations['CD_retro_XC'] <= (0.786 + self.fib_tolerance)
+        
+        return rule1 and rule2 and rule3
+    
+    def detect_patterns(self):
+        """Detecta patrones Cypher en los datos"""
+        high_idx, low_idx = self.find_pivots()
+        
+        # Detectar patrones alcistas (forma M)
+        for i in range(len(low_idx) - 4):
+            points = [
+                self.data['low'].iloc[low_idx[i]],      # X
+                self.data['high'].iloc[high_idx[i]],    # A
+                self.data['low'].iloc[low_idx[i+1]],    # B
+                self.data['high'].iloc[high_idx[i+1]],  # C
+                self.data['low'].iloc[low_idx[i+2]]     # D
+            ]
+            
+            fib_relations = self.calculate_fibonacci_relationships(points)
+            
+            if self.is_cypher_pattern(fib_relations):
+                pattern = {
+                    'type': 'bullish',
+                    'points': {
+                        'X': {'price': points[0], 'index': low_idx[i]},
+                        'A': {'price': points[1], 'index': high_idx[i]},
+                        'B': {'price': points[2], 'index': low_idx[i+1]},
+                        'C': {'price': points[3], 'index': high_idx[i+1]},
+                        'D': {'price': points[4], 'index': low_idx[i+2]}
+                    },
+                    'fib_relations': fib_relations,
+                    'entry_price': points[4],
+                    'stop_loss': points[0] * 0.995,  # Ligeramente por debajo de X
+                    'take_profit_1': points[4] + (points[4] - points[3]) * 0.382,  # 38.2% de CD
+                    'take_profit_2': points[4] + (points[4] - points[3]) * 0.618   # 61.8% de CD
+                }
+                self.patterns.append(pattern)
+        
+        # Detectar patrones bajistas (forma W)
+        for i in range(len(high_idx) - 4):
+            points = [
+                self.data['high'].iloc[high_idx[i]],    # X
+                self.data['low'].iloc[low_idx[i]],      # A
+                self.data['high'].iloc[high_idx[i+1]],  # B
+                self.data['low'].iloc[low_idx[i+1]],    # C
+                self.data['high'].iloc[high_idx[i+2]]   # D
+            ]
+            
+            fib_relations = self.calculate_fibonacci_relationships(points)
+            
+            if self.is_cypher_pattern(fib_relations):
+                pattern = {
+                    'type': 'bearish',
+                    'points': {
+                        'X': {'price': points[0], 'index': high_idx[i]},
+                        'A': {'price': points[1], 'index': low_idx[i]},
+                        'B': {'price': points[2], 'index': high_idx[i+1]},
+                        'C': {'price': points[3], 'index': low_idx[i+1]},
+                        'D': {'price': points[4], 'index': high_idx[i+2]}
+                    },
+                    'fib_relations': fib_relations,
+                    'entry_price': points[4],
+                    'stop_loss': points[0] * 1.005,  # Ligeramente por encima de X
+                    'take_profit_1': points[4] - (points[3] - points[4]) * 0.382,  # 38.2% de CD
+                    'take_profit_2': points[4] - (points[3] - points[4]) * 0.618   # 61.8% de CD
+                }
+                self.patterns.append(pattern)
+        
+        return self.patterns
+    
+    def plot_patterns(self, save_path=None):
+        """Grafica los patrones detectados"""
+        plt.figure(figsize=(15, 8))
+        
+        # Graficar velas
+        plt.plot(self.data.index, self.data['close'], label='Precio', color='black', alpha=0.7)
+        
+        # Graficar patrones
+        for pattern in self.patterns:
+            color = 'green' if pattern['type'] == 'bullish' else 'red'
+            alpha = 0.8
+            
+            # Extraer puntos
+            X = pattern['points']['X']
+            A = pattern['points']['A']
+            B = pattern['points']['B']
+            C = pattern['points']['C']
+            D = pattern['points']['D']
+            
+            # Graficar líneas del patrón
+            pattern_x = [X['index'], A['index'], B['index'], C['index'], D['index']]
+            pattern_y = [X['price'], A['price'], B['price'], C['price'], D['price']]
+            
+            plt.plot(pattern_x, pattern_y, color=color, linewidth=2, alpha=alpha, 
+                    label=f"Patrón Cypher {pattern['type']}")
+            
+            # Etiquetar puntos
+            plt.scatter(pattern_x, pattern_y, color=color, s=50, alpha=alpha)
+            for i, (point, label) in enumerate(zip([X, A, B, C, D], ['X', 'A', 'B', 'C', 'D'])):
+                plt.annotate(label, (point['index'], point['price']), 
+                           xytext=(5, 5), textcoords='offset points', fontsize=10)
+            
+            # Señalizar entrada, stop loss y take profits
+            plt.axhline(y=pattern['entry_price'], color=color, linestyle='--', alpha=0.5, label='Entrada')
+            plt.axhline(y=pattern['stop_loss'], color='orange', linestyle='--', alpha=0.5, label='Stop Loss')
+            plt.axhline(y=pattern['take_profit_1'], color='blue', linestyle='--', alpha=0.5, label='TP1')
+            plt.axhline(y=pattern['take_profit_2'], color='purple', linestyle='--', alpha=0.5, label='TP2')
+        
+        plt.title('Patrones Cypher Detectados')
+        plt.xlabel('Índice')
+        plt.ylabel('Precio')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+    
+    def get_trading_signals(self):
+        """Genera señales de trading basadas en los patrones detectados"""
+        signals = []
+        
+        for pattern in self.patterns:
+            signal = {
+                'pattern_type': pattern['type'],
+                'entry_price': pattern['entry_price'],
+                'stop_loss': pattern['stop_loss'],
+                'take_profit_1': pattern['take_profit_1'],
+                'take_profit_2': pattern['take_profit_2'],
+                'risk_reward_ratio_1': abs(pattern['take_profit_1'] - pattern['entry_price']) / 
+                                     abs(pattern['stop_loss'] - pattern['entry_price']),
+                'risk_reward_ratio_2': abs(pattern['take_profit_2'] - pattern['entry_price']) / 
+                                     abs(pattern['stop_loss'] - pattern['entry_price']),
+                'fibonacci_ratios': pattern['fib_relations'],
+                'confidence': self.calculate_pattern_confidence(pattern)
+            }
+            signals.append(signal)
+        
+        return signals
+    
+    def calculate_pattern_confidence(self, pattern):
+        """Calcula un puntaje de confianza para el patrón"""
+        fib_relations = pattern['fib_relations']
+        
+        # Ideal Fibonacci ratios for Cypher según el video
+        ideal_AB_XA = 0.5  # Midpoint of 0.382-0.618
+        ideal_BC_AB = 1.272  # Midpoint of 1.13-1.414
+        ideal_CD_XC = 0.786
+        
+        # Calculate deviation from ideal
+        dev_AB = abs(fib_relations['AB_retro_XA'] - ideal_AB_XA) / ideal_AB_XA
+        dev_BC = abs(fib_relations['BC_ext_AB'] - ideal_BC_AB) / ideal_BC_AB
+        dev_CD = abs(fib_relations['CD_retro_XC'] - ideal_CD_XC) / ideal_CD_XC
+        
+        # Confidence score (0-100)
+        confidence = max(0, 100 - (dev_AB + dev_BC + dev_CD) * 100)
+        
+        return min(100, confidence)
+
+class BitcoinTradingBot:
+    def __init__(self, api_key=None, api_secret=None, backtesting=True, 
+                 start_date='2023-01-01', end_date=None, capital_inicial=100000):
+        """
+        Inicializa el bot de trading para Bitcoin con patrón Cypher
+        
+        Args:
+            api_key: API Key de Bitget
+            api_secret: API Secret de Bitget
+            backtesting: True para backtesting, False para trading real
+            start_date: Fecha de inicio para backtesting
+            end_date: Fecha de fin para backtesting
+            capital_inicial: Capital inicial para trading
+        """
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.backtesting = backtesting
+        self.start_date = start_date
+        self.end_date = end_date or datetime.now().strftime('%Y-%m-%d')
+        self.capital_inicial = capital_inicial
+        self.capital_actual = capital_inicial
+        self.trades = []
+        self.patrones_detectados = []
+        
+        # Inicializar proveedor de datos
+        self.data_provider = DataProvider(api_key, api_secret)
+        
+        # Obtener datos históricos
+        self.data = self.get_historical_data()
+        
+        # Inicializar detector de patrones
+        self.detector = CypherPatternDetector(self.data, zigzag_depth, fib_tolerance)
+        
+        # Crear directorio para logs
+        if not os.path.exists('logs'):
+            os.makedirs('logs')
+        
+        # Inicializar log
+        self.log_file = f"logs/trading_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        self.log("Bot de trading Bitcoin Cypher iniciado")
+        self.log(f"Fuente de datos primaria: {primary_data_source}")
+        self.log(f"Exchange: Bitget")
+        self.log(f"Timeframe: {timeframe}")
+    
+    def log(self, message):
+        """Registra un mensaje en el log y lo imprime en pantalla"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_message = f"[{timestamp}] {message}"
+        print(log_message)
+        
+        with open(self.log_file, 'a') as f:
+            f.write(log_message + '\n')
+    
+    def get_historical_data(self):
+        """Obtiene datos históricos de Bitcoin"""
+        if self.backtesting:
+            # Calcular días desde start_date
+            start = datetime.strptime(self.start_date, '%Y-%m-%d')
+            days = (datetime.now() - start).days
+            
+            self.log(f"Obteniendo datos históricos de los últimos {days} días en timeframe {timeframe}")
+            
+            # Obtener datos del proveedor
+            data = self.data_provider.get_data(symbol, days)
+            
+            if data is None:
+                self.log("Error: No se pudieron obtener datos históricos")
+                return None
+            
+            return data
+        else:
+            # Para trading real, obtenemos datos recientes
+            self.log(f"Obteniendo datos recientes de Bitget en timeframe {timeframe}")
+            
+            # Obtener datos del proveedor
+            data = self.data_provider.get_data(symbol, 100)
+            
+            if data is None:
+                self.log("Error: No se pudieron obtener datos recientes")
+                return None
+            
+            return data
+    
+    def calculate_technical_indicators(self):
+        """Calcula indicadores técnicos para confirmación"""
+        # RSI
+        rsi_indicator = RSIIndicator(self.data['close'])
+        self.data['rsi'] = rsi_indicator.rsi()
+        
+        # MACD
+        macd = MACD(self.data['close'])
+        self.data['macd'] = macd.macd()
+        self.data['macd_signal'] = macd.macd_signal()
+        self.data['macd_histogram'] = macd.macd_diff()
+        
+        # Volumen promedio
+        self.data['volume_sma'] = self.data['volume'].rolling(window=20).mean()
+        
+        return self.data
+    
+    def confirm_pattern(self, pattern):
+        """
+        Confirma un patrón con indicadores técnicos
+        
+        Args:
+            pattern: Patrón detectado
+            
+        Returns:
+            bool: True si el patrón está confirmado
+        """
+        # Obtener índice del punto D
+        d_index = pattern['points']['D']['index']
+        
+        # Obtener valores de indicadores en ese punto
+        rsi_value = self.data.iloc[d_index]['rsi']
+        macd_value = self.data.iloc[d_index]['macd']
+        macd_signal = self.data.iloc[d_index]['macd_signal']
+        volume_value = self.data.iloc[d_index]['volume']
+        volume_avg = self.data.iloc[d_index]['volume_sma']
+        
+        # Confirmaciones según el tipo de patrón
+        if pattern['type'] == 'bullish':
+            # Patrón alcista
+            rsi_confirmation = not use_rsi_confirmation or rsi_value < rsi_oversold
+            macd_confirmation = not use_macd_confirmation or macd_value > macd_signal
+            volume_confirmation = not use_volume_confirmation or volume_value > volume_avg * 1.2
+            
+            return rsi_confirmation and macd_confirmation and volume_confirmation
+        else:
+            # Patrón bajista
+            rsi_confirmation = not use_rsi_confirmation or rsi_value > rsi_overbought
+            macd_confirmation = not use_macd_confirmation or macd_value < macd_signal
+            volume_confirmation = not use_volume_confirmation or volume_value > volume_avg * 1.2
+            
+            return rsi_confirmation and macd_confirmation and volume_confirmation
+    
+    def execute_trade(self, pattern):
+        """
+        Ejecuta una operación basada en un patrón detectado
+        
+        Args:
+            pattern: Patrón detectado
+        """
+        # Calcular tamaño de posición
+        risk_amount = self.capital_actual * risk_per_trade
+        stop_distance = abs(pattern['entry_price'] - pattern['stop_loss'])
+        position_size = risk_amount / stop_distance
+        
+        # Crear registro de trade
+        trade = {
+            'timestamp': datetime.now(),
+            'pattern_type': pattern['type'],
+            'entry_price': pattern['entry_price'],
+            'stop_loss': pattern['stop_loss'],
+            'take_profit_1': pattern['take_profit_1'],
+            'take_profit_2': pattern['take_profit_2'],
+            'position_size': position_size,
+            'status': 'open',
+            'fibonacci_ratios': pattern['fib_relations'],
+            'confidence': self.detector.calculate_pattern_confidence(pattern)
+        }
+        
+        if self.backtesting:
+            # Simular trade
+            self.log(f"SIMULACIÓN: Trade {pattern['type']} detectado")
+            self.log(f"  - Precio de entrada: {pattern['entry_price']}")
+            self.log(f"  - Stop Loss: {pattern['stop_loss']}")
+            self.log(f"  - Take Profit 1: {pattern['take_profit_1']}")
+            self.log(f"  - Take Profit 2: {pattern['take_profit_2']}")
+            self.log(f"  - Tamaño de posición: {position_size}")
+            
+            # Añadir a la lista de trades
+            self.trades.append(trade)
+        else:
+            # Ejecutar trade real
+            try:
+                if pattern['type'] == 'bullish':
+                    # Orden de compra
+                    order = self.data_provider.exchange.create_market_buy_order(
+                        symbol, 
+                        position_size
+                    )
+                    self.log(f"ORDEN EJECUTADA: Compra a mercado de {position_size} BTC")
+                else:
+                    # Orden de venta
+                    order = self.data_provider.exchange.create_market_sell_order(
+                        symbol, 
+                        position_size
+                    )
+                    self.log(f"ORDEN EJECUTADA: Venta a mercado de {position_size} BTC")
+                
+                # Añadir a la lista de trades
+                trade['order_id'] = order['id']
+                self.trades.append(trade)
+                
+                # Configurar órdenes de stop loss y take profit
+                self.set_exit_orders(trade)
+                
+            except Exception as e:
+                self.log(f"ERROR al ejecutar trade: {str(e)}")
+    
+    def set_exit_orders(self, trade):
+        """
+        Configura órdenes de salida (stop loss y take profit)
+        
+        Args:
+            trade: Trade abierto
+        """
+        try:
+            if trade['pattern_type'] == 'bullish':
+                # Para trades alcistas
+                stop_loss_order = self.data_provider.exchange.create_order(
+                    symbol=symbol,
+                    type='stop_market',
+                    side='sell',
+                    amount=trade['position_size'],
+                    price=trade['stop_loss'],
+                    params={'stopPrice': trade['stop_loss']}
+                )
+                
+                take_profit_order = self.data_provider.exchange.create_order(
+                    symbol=symbol,
+                    type='limit',
+                    side='sell',
+                    amount=trade['position_size'] * 0.5,  # 50% en TP1
+                    price=trade['take_profit_1']
+                )
+                
+                self.log(f"ORDENES CONFIGURADAS: Stop Loss y Take Profit 1")
+                
+            else:
+                # Para trades bajistas
+                stop_loss_order = self.data_provider.exchange.create_order(
+                    symbol=symbol,
+                    type='stop_market',
+                    side='buy',
+                    amount=trade['position_size'],
+                    price=trade['stop_loss'],
+                    params={'stopPrice': trade['stop_loss']}
+                )
+                
+                take_profit_order = self.data_provider.exchange.create_order(
+                    symbol=symbol,
+                    type='limit',
+                    side='buy',
+                    amount=trade['position_size'] * 0.5,  # 50% en TP1
+                    price=trade['take_profit_1']
+                )
+                
+                self.log(f"ORDENES CONFIGURADAS: Stop Loss y Take Profit 1")
+                
+        except Exception as e:
+            self.log(f"ERROR al configurar órdenes de salida: {str(e)}")
+    
+    def monitor_open_trades(self):
+        """Monitorea los trades abiertos y actualiza su estado"""
+        for trade in self.trades:
+            if trade['status'] == 'open':
+                if self.backtesting:
+                    # Simular monitoreo
+                    # En un backtesting real, necesitaríamos lógica más compleja
+                    # Aquí solo cerramos el trade después de un tiempo simulado
+                    trade['status'] = 'closed'
+                    trade['exit_price'] = trade['take_profit_1']  # Simulamos que alcanzó TP1
+                    trade['exit_timestamp'] = datetime.now()
+                    
+                    # Calcular ganancia/pérdida
+                    if trade['pattern_type'] == 'bullish':
+                        pnl = (trade['exit_price'] - trade['entry_price']) * trade['position_size']
+                    else:
+                        pnl = (trade['entry_price'] - trade['exit_price']) * trade['position_size']
+                    
+                    trade['pnl'] = pnl
+                    self.capital_actual += pnl
+                    
+                    self.log(f"SIMULACIÓN: Trade cerrado con PNL: {pnl}")
+                else:
+                    # Monitoreo real
+                    try:
+                        # Obtener estado de la orden
+                        order = self.data_provider.exchange.fetch_order(trade['order_id'], symbol)
+                        
+                        if order['status'] == 'closed':
+                            trade['status'] = 'closed'
+                            trade['exit_price'] = order['price']
+                            trade['exit_timestamp'] = datetime.now()
+                            
+                            # Calcular ganancia/pérdida
+                            if trade['pattern_type'] == 'bullish':
+                                pnl = (trade['exit_price'] - trade['entry_price']) * trade['position_size']
+                            else:
+                                pnl = (trade['entry_price'] - trade['exit_price']) * trade['position_size']
+                            
+                            trade['pnl'] = pnl
+                            self.capital_actual += pnl
+                            
+                            self.log(f"Trade cerrado con PNL: {pnl}")
+                            
+                    except Exception as e:
+                        self.log(f"ERROR al monitorear trade: {str(e)}")
+    
+    def run_backtesting(self):
+        """Ejecuta backtesting de la estrategia"""
+        self.log("Iniciando backtesting...")
+        
+        # Calcular indicadores técnicos
+        self.calculate_technical_indicators()
+        
+        # Detectar patrones
+        patterns = self.detector.detect_patterns()
+        self.patrones_detectados = patterns
+        
+        self.log(f"Patrones detectados: {len(patterns)}")
+        
+        # Filtrar patrones confirmados
+        confirmed_patterns = [p for p in patterns if self.confirm_pattern(p)]
+        
+        self.log(f"Patrones confirmados: {len(confirmed_patterns)}")
+        
+        # Ejecutar trades para patrones confirmados
+        for pattern in confirmed_patterns:
+            self.execute_trade(pattern)
+        
+        # Simular cierre de trades
+        for trade in self.trades:
+            if trade['status'] == 'open':
+                # Simular resultado del trade
+                # En un backtesting real, esto sería más complejo
+                trade['status'] = 'closed'
+                
+                # Simular resultado aleatorio basado en la confianza del patrón
+                confidence = trade['confidence'] / 100
+                success = np.random.random() < confidence
+                
+                if success:
+                    # Trade exitoso
+                    if trade['pattern_type'] == 'bullish':
+                        trade['exit_price'] = trade['take_profit_1']
+                    else:
+                        trade['exit_price'] = trade['take_profit_1']
+                    
+                    if trade['pattern_type'] == 'bullish':
+                        pnl = (trade['exit_price'] - trade['entry_price']) * trade['position_size']
+                    else:
+                        pnl = (trade['entry_price'] - trade['exit_price']) * trade['position_size']
+                else:
+                    # Trade fallido
+                    trade['exit_price'] = trade['stop_loss']
+                    
+                    if trade['pattern_type'] == 'bullish':
+                        pnl = (trade['exit_price'] - trade['entry_price']) * trade['position_size']
+                    else:
+                        pnl = (trade['entry_price'] - trade['exit_price']) * trade['position_size']
+                
+                trade['pnl'] = pnl
+                trade['exit_timestamp'] = datetime.now()
+                self.capital_actual += pnl
+        
+        # Calcular estadísticas
+        self.calculate_backtesting_stats()
+        
+        # Graficar resultados
+        self.plot_backtesting_results()
+    
+    def calculate_backtesting_stats(self):
+        """Calcula estadísticas del backtesting"""
+        if not self.trades:
+            self.log("No hay trades para calcular estadísticas")
+            return
+        
+        # Separar trades ganadores y perdedores
+        winning_trades = [t for t in self.trades if t.get('pnl', 0) > 0]
+        losing_trades = [t for t in self.trades if t.get('pnl', 0) <= 0]
+        
+        # Calcular estadísticas básicas
+        total_trades = len(self.trades)
+        winning_trades_count = len(winning_trades)
+        losing_trades_count = len(losing_trades)
+        win_rate = (winning_trades_count / total_trades) * 100 if total_trades > 0 else 0
+        
+        # Calcular PNL total
+        total_pnl = sum(t.get('pnl', 0) for t in self.trades)
+        
+        # Calcular PNL promedio
+        avg_win = sum(t.get('pnl', 0) for t in winning_trades) / winning_trades_count if winning_trades_count > 0 else 0
+        avg_loss = sum(t.get('pnl', 0) for t in losing_trades) / losing_trades_count if losing_trades_count > 0 else 0
+        
+        # Calcular profit factor
+        gross_profit = sum(t.get('pnl', 0) for t in winning_trades)
+        gross_loss = abs(sum(t.get('pnl', 0) for t in losing_trades))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        
+        # Calcular drawdown máximo
+        cumulative_pnl = []
+        running_pnl = 0
+        max_drawdown = 0
+        
+        for trade in self.trades:
+            running_pnl += trade.get('pnl', 0)
+            cumulative_pnl.append(running_pnl)
+            
+            # Calcular drawdown actual
+            peak = max(cumulative_pnl)
+            drawdown = peak - running_pnl
+            max_drawdown = max(max_drawdown, drawdown)
+        
+        # Calcular Sharpe ratio (simplificado)
+        if len(self.trades) > 1:
+            pnl_returns = [t.get('pnl', 0) / self.capital_inicial for t in self.trades]
+            avg_return = sum(pnl_returns) / len(pnl_returns)
+            std_return = np.std(pnl_returns)
+            sharpe_ratio = avg_return / std_return if std_return > 0 else 0
+        else:
+            sharpe_ratio = 0
+        
+        # Calcular rendimiento mensual y anual
+        monthly_returns = self.calculate_monthly_returns()
+        annual_returns = self.calculate_annual_returns()
+        
+        # Guardar estadísticas
+        self.stats = {
+            'total_trades': total_trades,
+            'winning_trades': winning_trades_count,
+            'losing_trades': losing_trades_count,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_drawdown,
+            'sharpe_ratio': sharpe_ratio,
+            'initial_capital': self.capital_inicial,
+            'final_capital': self.capital_actual,
+            'total_return': ((self.capital_actual - self.capital_inicial) / self.capital_inicial) * 100,
+            'monthly_returns': monthly_returns,
+            'annual_returns': annual_returns
+        }
+        
+        # Imprimir estadísticas
+        self.log("\n" + "="*50)
+        self.log("ESTADÍSTICAS DE BACKTESTING")
+        self.log("="*50)
+        self.log(f"Total de trades: {total_trades}")
+        self.log(f"Trades ganadores: {winning_trades_count} ({win_rate:.2f}%)")
+        self.log(f"Trades perdedores: {losing_trades_count} ({100-win_rate:.2f}%)")
+        self.log(f"PNL total: ${total_pnl:.2f}")
+        self.log(f"Retorno total: {self.stats['total_return']:.2f}%")
+        self.log(f"Ganancia promedio: ${avg_win:.2f}")
+        self.log(f"Pérdida promedio: ${avg_loss:.2f}")
+        self.log(f"Profit Factor: {profit_factor:.2f}")
+        self.log(f"Máximo Drawdown: ${max_drawdown:.2f}")
+        self.log(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+        self.log(f"Capital inicial: ${self.capital_inicial:.2f}")
+        self.log(f"Capital final: ${self.capital_actual:.2f}")
+        self.log("="*50)
+        
+        # Imprimir rendimiento mensual
+        self.log("\nRENDIMIENTO MENSUAL:")
+        self.log("="*30)
+        for month, return_pct in monthly_returns.items():
+            self.log(f"{month}: {return_pct:.2f}%")
+        
+        # Imprimir rendimiento anual
+        self.log("\nRENDIMIENTO ANUAL:")
+        self.log("="*30)
+        for year, return_pct in annual_returns.items():
+            self.log(f"{year}: {return_pct:.2f}%")
+        self.log("="*50)
+    
+    def calculate_monthly_returns(self):
+        """Calcula el rendimiento mensual"""
+        if not self.trades:
+            return {}
+        
+        monthly_returns = {}
+        
+        # Agrupar trades por mes
+        for trade in self.trades:
+            if 'exit_timestamp' in trade:
+                timestamp = trade['exit_timestamp']
+                if isinstance(timestamp, str):
+                    timestamp = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                
+                month_key = timestamp.strftime('%Y-%m')
+                
+                if month_key not in monthly_returns:
+                    monthly_returns[month_key] = 0
+                
+                monthly_returns[month_key] += trade.get('pnl', 0)
+        
+        # Convertir a porcentajes
+        for month in monthly_returns:
+            monthly_returns[month] = (monthly_returns[month] / self.capital_inicial) * 100
+        
+        return monthly_returns
+    
+    def calculate_annual_returns(self):
+        """Calcula el rendimiento anual"""
+        if not self.trades:
+            return {}
+        
+        annual_returns = {}
+        
+        # Agrupar trades por año
+        for trade in self.trades:
+            if 'exit_timestamp' in trade:
+                timestamp = trade['exit_timestamp']
+                if isinstance(timestamp, str):
+                    timestamp = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                
+                year_key = timestamp.strftime('%Y')
+                
+                if year_key not in annual_returns:
+                    annual_returns[year_key] = 0
+                
+                annual_returns[year_key] += trade.get('pnl', 0)
+        
+        # Convertir a porcentajes
+        for year in annual_returns:
+            annual_returns[year] = (annual_returns[year] / self.capital_inicial) * 100
+        
+        return annual_returns
+    
+    def plot_backtesting_results(self):
+        """Grafica los resultados del backtesting"""
+        # Crear figura con subplots
+        fig = plt.figure(figsize=(20, 15))
+        
+        # Gráfico 1: Precio y patrones detectados
+        ax1 = plt.subplot(3, 2, 1)
+        ax1.plot(self.data.index, self.data['close'], label='Precio', color='black', alpha=0.7)
+        
+        # Graficar patrones detectados
+        for pattern in self.patrones_detectados:
+            color = 'green' if pattern['type'] == 'bullish' else 'red'
+            alpha = 0.8
+            
+            # Extraer puntos
+            X = pattern['points']['X']
+            A = pattern['points']['A']
+            B = pattern['points']['B']
+            C = pattern['points']['C']
+            D = pattern['points']['D']
+            
+            # Graficar líneas del patrón
+            pattern_x = [X['index'], A['index'], B['index'], C['index'], D['index']]
+            pattern_y = [X['price'], A['price'], B['price'], C['price'], D['price']]
+            
+            ax1.plot(pattern_x, pattern_y, color=color, linewidth=2, alpha=alpha)
+            
+            # Etiquetar puntos
+            ax1.scatter(pattern_x, pattern_y, color=color, s=50, alpha=alpha)
+        
+        ax1.set_title(f'Precio de Bitcoin y Patrones Cypher Detectados ({timeframe})')
+        ax1.set_ylabel('Precio (USD)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Gráfico 2: PNL acumulado
+        ax2 = plt.subplot(3, 2, 2)
+        
+        # Calcular PNL acumulado
+        cumulative_pnl = []
+        running_pnl = 0
+        
+        for trade in self.trades:
+            running_pnl += trade.get('pnl', 0)
+            cumulative_pnl.append(running_pnl)
+        
+        ax2.plot(range(len(cumulative_pnl)), cumulative_pnl, color='blue', linewidth=2)
+        ax2.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+        ax2.set_title('PNL Acumulado')
+        ax2.set_ylabel('PNL (USD)')
+        ax2.grid(True, alpha=0.3)
+        
+        # Gráfico 3: Distribución de trades
+        ax3 = plt.subplot(3, 2, 3)
+        
+        # Separar trades ganadores y perdedores
+        winning_pnls = [t.get('pnl', 0) for t in self.trades if t.get('pnl', 0) > 0]
+        losing_pnls = [t.get('pnl', 0) for t in self.trades if t.get('pnl', 0) <= 0]
+        
+        ax3.hist(winning_pnls, bins=20, alpha=0.5, color='green', label='Ganadores')
+        ax3.hist(losing_pnls, bins=20, alpha=0.5, color='red', label='Perdedores')
+        ax3.axvline(x=0, color='black', linestyle='--', alpha=0.5)
+        ax3.set_title('Distribución de Trades')
+        ax3.set_xlabel('PNL (USD)')
+        ax3.set_ylabel('Frecuencia')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Gráfico 4: Rendimiento mensual
+        ax4 = plt.subplot(3, 2, 4)
+        
+        monthly_returns = self.stats.get('monthly_returns', {})
+        if monthly_returns:
+            months = list(monthly_returns.keys())
+            returns = list(monthly_returns.values())
+            
+            colors = ['green' if r > 0 else 'red' for r in returns]
+            ax4.bar(months, returns, color=colors, alpha=0.7)
+            ax4.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+            ax4.set_title('Rendimiento Mensual')
+            ax4.set_ylabel('Retorno (%)')
+            ax4.tick_params(axis='x', rotation=45)
+            ax4.grid(True, alpha=0.3)
+        
+        # Gráfico 5: Drawdown
+        ax5 = plt.subplot(3, 2, 5)
+        
+        # Calcular drawdown
+        cumulative_pnl = []
+        running_pnl = 0
+        drawdowns = []
+        peak = 0
+        
+        for trade in self.trades:
+            running_pnl += trade.get('pnl', 0)
+            cumulative_pnl.append(running_pnl)
+            
+            if running_pnl > peak:
+                peak = running_pnl
+            
+            drawdown = (peak - running_pnl) / peak if peak > 0 else 0
+            drawdowns.append(drawdown * 100)  # Convertir a porcentaje
+        
+        ax5.fill_between(range(len(drawdowns)), drawdowns, color='red', alpha=0.3)
+        ax5.plot(range(len(drawdowns)), drawdowns, color='red', linewidth=2)
+        ax5.set_title('Drawdown (%)')
+        ax5.set_ylabel('Drawdown (%)')
+        ax5.set_xlabel('Trade #')
+        ax5.grid(True, alpha=0.3)
+        
+        # Gráfico 6: Métricas clave
+        ax6 = plt.subplot(3, 2, 6)
+        
+        # Crear texto con métricas clave
+        metrics_text = f"""
+        Win Rate: {self.stats['win_rate']:.1f}%
+        Profit Factor: {self.stats['profit_factor']:.2f}
+        Sharpe Ratio: {self.stats['sharpe_ratio']:.2f}
+        Max Drawdown: ${self.stats['max_drawdown']:.0f}
+        Total Return: {self.stats['total_return']:.1f}%
+        Timeframe: {timeframe}
+        """
+        
+        ax6.text(0.1, 0.5, metrics_text, fontsize=12, verticalalignment='center',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+        ax6.set_title('Métricas Clave')
+        ax6.axis('off')
+        
+        plt.tight_layout()
+        
+        # Guardar gráfico
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        plt.savefig(f"logs/backtesting_results_{timestamp}.png", dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Crear gráfico interactivo con Plotly
+        if save_interactive_charts:
+            self.create_interactive_charts()
+    
+    def create_interactive_charts(self):
+        """Crea gráficos interactivos con Plotly"""
+        # Gráfico 1: Precio y patrones
+        fig1 = go.Figure()
+        
+        # Añadir precio
+        fig1.add_trace(go.Scatter(
+            x=self.data.index,
+            y=self.data['close'],
+            mode='lines',
+            name='Precio',
+            line=dict(color='black', width=1)
+        ))
+        
+        # Añadir patrones
+        for pattern in self.patrones_detectados:
+            color = 'green' if pattern['type'] == 'bullish' else 'red'
+            
+            X = pattern['points']['X']
+            A = pattern['points']['A']
+            B = pattern['points']['B']
+            C = pattern['points']['C']
+            D = pattern['points']['D']
+            
+            pattern_x = [X['index'], A['index'], B['index'], C['index'], D['index']]
+            pattern_y = [X['price'], A['price'], B['price'], C['price'], D['price']]
+            
+            fig1.add_trace(go.Scatter(
+                x=pattern_x,
+                y=pattern_y,
+                mode='lines+markers',
+                name=f'Patrón {pattern["type"]}',
+                line=dict(color=color, width=2),
+                marker=dict(size=8, color=color)
+            ))
+        
+        fig1.update_layout(
+            title=f'Precio de Bitcoin y Patrones Cypher Detectados ({timeframe})',
+            xaxis_title='Fecha',
+            yaxis_title='Precio (USD)',
+            template='plotly_white'
+        )
+        
+        # Gráfico 2: PNL acumulado
+        fig2 = go.Figure()
+        
+        cumulative_pnl = []
+        running_pnl = 0
+        
+        for trade in self.trades:
+            running_pnl += trade.get('pnl', 0)
+            cumulative_pnl.append(running_pnl)
+        
+        fig2.add_trace(go.Scatter(
+            x=list(range(len(cumulative_pnl))),
+            y=cumulative_pnl,
+            mode='lines',
+            name='PNL Acumulado',
+            line=dict(color='blue', width=2)
+        ))
+        
+        fig2.add_hline(y=0, line_dash="dash", line_color="black")
+        fig2.update_layout(
+            title='PNL Acumulado',
+            xaxis_title='Trade #',
+            yaxis_title='PNL (USD)',
+            template='plotly_white'
+        )
+        
+        # Gráfico 3: Rendimiento mensual
+        fig3 = go.Figure()
+        
+        monthly_returns = self.stats.get('monthly_returns', {})
+        if monthly_returns:
+            months = list(monthly_returns.keys())
+            returns = list(monthly_returns.values())
+            colors = ['green' if r > 0 else 'red' for r in returns]
+            
+            fig3.add_trace(go.Bar(
+                x=months,
+                y=returns,
+                name='Retorno Mensual',
+                marker_color=colors
+            ))
+        
+        fig3.add_hline(y=0, line_dash="dash", line_color="black")
+        fig3.update_layout(
+            title='Rendimiento Mensual',
+            xaxis_title='Mes',
+            yaxis_title='Retorno (%)',
+            template='plotly_white'
+        )
+        
+        # Guardar gráficos interactivos
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        fig1.write_html(f"logs/price_patterns_{timestamp}.html")
+        fig2.write_html(f"logs/pnl_cumulative_{timestamp}.html")
+        fig3.write_html(f"logs/monthly_returns_{timestamp}.html")
+        
+        self.log(f"Gráficos interactivos guardados en la carpeta logs")
+    
+    def save_results(self):
+        """Guarda los resultados del backtesting"""
+        results = {
+            'config': {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'capital_inicial': self.capital_inicial,
+                'risk_per_trade': risk_per_trade,
+                'zigzag_depth': zigzag_depth,
+                'fib_tolerance': fib_tolerance,
+                'start_date': self.start_date,
+                'end_date': self.end_date,
+                'primary_data_source': primary_data_source,
+                'exchange': 'Bitget'
+            },
+            'stats': self.stats,
+            'trades': []
+        }
+        
+        # Formatear trades para guardar
+        for trade in self.trades:
+            trade_copy = trade.copy()
+            
+            # Convertir objetos datetime a string
+            if 'timestamp' in trade_copy and isinstance(trade_copy['timestamp'], datetime):
+                trade_copy['timestamp'] = trade_copy['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            
+            if 'exit_timestamp' in trade_copy and isinstance(trade_copy['exit_timestamp'], datetime):
+                trade_copy['exit_timestamp'] = trade_copy['exit_timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            
+            results['trades'].append(trade_copy)
+        
+        # Guardar en archivo JSON
+        with open(f"logs/backtesting_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", 'w') as f:
+            json.dump(results, f, indent=4)
+        
+        self.log(f"Resultados guardados en logs/backtesting_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+
+# =============================================
+# FUNCIÓN PRINCIPAL
+# =============================================
+
+def main():
+    """Función principal del bot"""
+    print("="*60)
+    print("BOT DE TRADING BITCOIN CON PATRÓN CYPHER")
+    print("Exchange: Bitget")
+    print("Fuentes de datos: CCXT (Bitget), yfinance (respaldo), CoinGecko (fundamentales)")
+    print("Backtesting local con gráficos detallados")
+    print("="*60)
+    
+    # Crear instancia del bot
+    bot = BitcoinTradingBot(
+        api_key=api_key if not backtesting else None,
+        api_secret=api_secret if not backtesting else None,
+        backtesting=backtesting,
+        start_date=start_date,
+        end_date=end_date,
+        capital_inicial=capital_inicial
+    )
+    
+    # Ejecutar según el modo
+    if backtesting:
+        # Modo backtesting
+        bot.run_backtesting()
+        bot.save_results()
+    else:
+        # Modo trading real
+        print("\nADVERTENCIA: Estás a punto de iniciar trading real con fondos reales.")
+        print("Presiona Ctrl+C para cancelar o espera 5 segundos para continuar...")
+        time.sleep(5)
+        bot.run_real_trading()
+
+# =============================================
+# EJECUTAR EL BOT
+# =============================================
+
+if __name__ == "__main__":
+    main()
