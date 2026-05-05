@@ -899,10 +899,11 @@ bool CheckADRFilter()
 //+------------------------------------------------------------------+
 //| CalculateLotSize — tamaño de posición por riesgo                  |
 //+------------------------------------------------------------------+
-double CalculateLotSize(double sl_pips)
+double CalculateLotSize(double sl_pips, double risk_pct = -1.0)
 {
    double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
-   double risk_usd  = balance * RiskPercent / 100.0;
+   if(risk_pct < 0) risk_pct = RiskPercent;
+   double risk_usd  = balance * risk_pct / 100.0;
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double point      = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -944,10 +945,7 @@ void ExecuteLongEntry(int score)
 
    // Ajustar riesgo por score: alta confianza = tamaño normal, baja = reducido
    double risk_mult = (score >= HighConfScore) ? 1.0 : 0.75;
-   double base_risk_pct = RiskPercent;
-   RiskPercent = base_risk_pct * risk_mult;
-   double lots = CalculateLotSize(sl_dist);
-   RiskPercent = base_risk_pct;
+   double lots = CalculateLotSize(sl_dist, RiskPercent * risk_mult);
 
    if(lots <= 0) return;
 
@@ -996,10 +994,7 @@ void ExecuteShortEntry(int score)
    double tp3 = NormalizeDouble(entry - sl_dist * TP3_Ratio, _Digits);
 
    double risk_mult = (MathAbs(score) >= HighConfScore) ? 1.0 : 0.75;
-   double base_risk_pct = RiskPercent;
-   RiskPercent = base_risk_pct * risk_mult;
-   double lots = CalculateLotSize(sl_dist);
-   RiskPercent = base_risk_pct;
+   double lots = CalculateLotSize(sl_dist, RiskPercent * risk_mult);
 
    if(lots <= 0) return;
 
