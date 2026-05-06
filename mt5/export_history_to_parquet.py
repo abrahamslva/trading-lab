@@ -45,6 +45,9 @@ def main():
     print(f"Conectado a: {info.name}  build={info.build}")
     print(f"Descargando {SYMBOL} M15 desde {START_DATE.date()} hasta {END_DATE.date()}...")
 
+    # Asegurar que el símbolo está visible en Market Watch
+    mt5.symbol_select(SYMBOL, True)
+
     # Descargar barras
     rates = mt5.copy_rates_range(SYMBOL, TIMEFRAME, START_DATE, END_DATE)
 
