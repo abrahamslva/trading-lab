@@ -2,9 +2,10 @@
 mt5/export_history_to_parquet.py
 ---------------------------------
 Exporta historial XAUUSD M15 desde MetaTrader 5 a un archivo Parquet.
+Descarga por chunks anuales para evitar el límite del broker en copy_rates_range.
 
 EJECUTAR EN WINDOWS con MT5 abierto:
-    python export_history_to_parquet.py
+    python mt5\\export_history_to_parquet.py
 
 Luego copiar el archivo generado al contenedor Linux:
     data/dukascopy/XAUUSD_15min_mt5.parquet
@@ -14,7 +15,7 @@ Requisitos:
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -31,26 +32,40 @@ TIMEFRAME = mt5.TIMEFRAME_M15
 END_DATE  = datetime.now()
 OUT_FILE  = Path(__file__).parent.parent / "data" / "dukascopy" / "XAUUSD_15min_mt5.parquet"
 
-# Años candidatos para buscar el inicio del historial disponible (de más antiguo a más reciente)
+# Años candidatos para buscar el inicio del historial (de más antiguo a más reciente)
 CANDIDATE_YEARS = [2015, 2017, 2019, 2020, 2021, 2022, 2023, 2024]
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def detect_start_date(symbol: str, timeframe: int, end_date: datetime) -> datetime:
+def detect_start_year(symbol: str, timeframe: int) -> int:
     """Prueba años candidatos y devuelve el más antiguo con datos disponibles."""
     print("Detectando historial disponible en el broker...")
+    found = None
     for year in CANDIDATE_YEARS:
-        candidate = datetime(year, 1, 1)
-        rates = mt5.copy_rates_range(symbol, timeframe, candidate, datetime(year, 1, 8))
+        t0 = datetime(year, 1, 1)
+        t1 = datetime(year, 1, 8)
+        rates = mt5.copy_rates_range(symbol, timeframe, t0, t1)
         if rates is not None and len(rates) > 0:
-            print(f"  ✓ Historial disponible desde al menos {year}")
-            return candidate
+            print(f"  ✓ Datos disponibles en {year}")
+            found = year
         else:
             print(f"  ✗ Sin datos en {year}: {mt5.last_error()}")
-    # Fallback: usar el año más reciente de los candidatos
-    fallback = datetime(CANDIDATE_YEARS[-1], 1, 1)
-    print(f"  → Usando fallback: {fallback.date()}")
-    return fallback
+    if found is None:
+        print("ERROR: No se encontraron datos para ningún año candidato.")
+        mt5.shutdown()
+        sys.exit(1)
+    print(f"  → Iniciando descarga desde {found}")
+    return found
+
+
+def fetch_year_chunk(symbol: str, timeframe: int, year: int, end_date: datetime):
+    """Descarga un chunk de un año (o hasta end_date si es el año actual)."""
+    t0 = datetime(year, 1, 1)
+    t1 = datetime(year + 1, 1, 1) if year < end_date.year else end_date
+    rates = mt5.copy_rates_range(symbol, timeframe, t0, t1)
+    if rates is None:
+        return None
+    return rates
 
 
 def main():
@@ -66,23 +81,33 @@ def main():
     # Asegurar que el símbolo está visible en Market Watch
     mt5.symbol_select(SYMBOL, True)
 
-    # Auto-detectar fecha de inicio disponible
-    START_DATE = detect_start_date(SYMBOL, TIMEFRAME, END_DATE)
-    print(f"Descargando {SYMBOL} M15 desde {START_DATE.date()} hasta {END_DATE.date()}...")
+    # Detectar año inicial disponible
+    start_year = detect_start_year(SYMBOL, TIMEFRAME)
 
-    # Descargar barras
-    rates = mt5.copy_rates_range(SYMBOL, TIMEFRAME, START_DATE, END_DATE)
+    # Descargar por chunks anuales
+    all_chunks = []
+    current_year = END_DATE.year
+    years = list(range(start_year, current_year + 1))
+    print(f"\nDescargando {len(years)} año(s) de datos M15...")
 
-    if rates is None or len(rates) == 0:
-        print(f"ERROR: No se obtuvieron datos. {mt5.last_error()}")
-        print("  Verifica que el símbolo XAUUSD está disponible en Market Watch.")
-        mt5.shutdown()
-        sys.exit(1)
+    for year in years:
+        rates = fetch_year_chunk(SYMBOL, TIMEFRAME, year, END_DATE)
+        if rates is not None and len(rates) > 0:
+            all_chunks.append(pd.DataFrame(rates))
+            print(f"  {year}: {len(rates):,} barras")
+        else:
+            err = mt5.last_error()
+            # Error (-2) en años sin mercado (fines de año) es esperado
+            print(f"  {year}: sin datos ({err})")
 
     mt5.shutdown()
 
-    # Convertir a DataFrame
-    df = pd.DataFrame(rates)
+    if not all_chunks:
+        print("ERROR: No se obtuvieron datos en ningún chunk.")
+        sys.exit(1)
+
+    # Combinar todos los chunks
+    df = pd.concat(all_chunks, ignore_index=True)
     df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
     df = df.rename(columns={
         "open":        "Open",
@@ -92,7 +117,7 @@ def main():
         "tick_volume": "Volume",
     })
     df = df.set_index("timestamp")[["Open", "High", "Low", "Close", "Volume"]]
-    df = df.sort_index()
+    df = df[~df.index.duplicated(keep="last")].sort_index()
 
     # Guardar
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -106,8 +131,8 @@ def main():
     print(f"  Tamaño    : {size_mb:.1f} MB")
     print(f"  Precio min: {df.Low.min():.2f}  max: {df.High.max():.2f}")
     print("\nSiguiente paso:")
-    print(f"  Copia este archivo a tu contenedor Linux en:")
-    print(f"  /workspaces/trading-lab/data/dukascopy/XAUUSD_15min_mt5.parquet")
+    print("  Copia este archivo a tu contenedor Linux en:")
+    print("  /workspaces/trading-lab/data/dukascopy/XAUUSD_15min_mt5.parquet")
 
 
 if __name__ == "__main__":
