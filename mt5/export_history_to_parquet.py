@@ -28,8 +28,8 @@ except ImportError:
 # ── Configuración ──────────────────────────────────────────────────────────
 SYMBOL     = "XAUUSD"
 TIMEFRAME  = mt5.TIMEFRAME_M15
-START_DATE = datetime(2015, 1, 1, tzinfo=timezone.utc)  # inicio del histórico
-END_DATE   = datetime.now(tz=timezone.utc)
+START_DATE = datetime(2015, 1, 1)   # MT5 en Windows NO acepta tzinfo — usar naive
+END_DATE   = datetime.now()
 OUT_FILE   = Path(__file__).parent.parent / "data" / "dukascopy" / "XAUUSD_15min_mt5.parquet"
 # ──────────────────────────────────────────────────────────────────────────
 
