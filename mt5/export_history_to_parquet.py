@@ -47,7 +47,8 @@ def detect_start_year(symbol: str, timeframe: int) -> int:
         rates = mt5.copy_rates_range(symbol, timeframe, t0, t1)
         if rates is not None and len(rates) > 0:
             print(f"  ✓ Datos disponibles en {year}")
-            found = year
+            if found is None:
+                found = year  # guardar solo el más antiguo
         else:
             print(f"  ✗ Sin datos en {year}: {mt5.last_error()}")
     if found is None:
