@@ -29,6 +29,17 @@ import json
 import os
 import sys
 
+# Dukascopy loader (M15 histórico sin límite de tiempo)
+try:
+    from src.dukascopy_loader import download_xauusd_m15 as _dk_download
+    _HAS_DUKASCOPY = True
+except ImportError:
+    try:
+        from dukascopy_loader import download_xauusd_m15 as _dk_download
+        _HAS_DUKASCOPY = True
+    except ImportError:
+        _HAS_DUKASCOPY = False
+
 # ──────────────────────────────────────────────────────────────────
 # PARÁMETROS — Iteración 1 (base)
 # ──────────────────────────────────────────────────────────────────
@@ -181,6 +192,49 @@ def resample_data(df_1h: pd.DataFrame, tf: str) -> pd.DataFrame:
         "Volume": "sum"
     }).dropna()
     return resampled
+
+
+def download_dukascopy_ohlcv(
+    start: str = "2015-01-01",
+    end:   str = "2025-01-01",
+    timeframe: str = "15min",
+    cache_dir: str = "data/dukascopy",
+) -> pd.DataFrame:
+    """
+    Descarga datos XAUUSD de Dukascopy (CDN público, sin credenciales).
+    Soporta cualquier timeframe: '15min', '30min', '1h', '4h', etc.
+    Los datos se cachean en disco para no re-descargar en ejecuciones siguientes.
+    Incluye datos históricos de hasta ~20 años.
+    """
+    if not _HAS_DUKASCOPY:
+        raise RuntimeError(
+            "dukascopy_loader no disponible. "
+            "Asegúrate de que src/dukascopy_loader.py existe."
+        )
+
+    # Verificar si ya existe parquet cacheado para este timeframe+periodo
+    cache_path = os.path.join(cache_dir, f"XAUUSD_{timeframe}_{start[:7]}_{end[:7]}.parquet")
+    if os.path.exists(cache_path):
+        print(f"  Cargando desde caché: {cache_path}")
+        df = pd.read_parquet(cache_path)
+        df.index = pd.to_datetime(df.index, utc=True)
+        print(f"  OK: {len(df)} barras desde {df.index[0]} hasta {df.index[-1]}")
+        return df
+
+    df = _dk_download(
+        start=start,
+        end=end,
+        timeframe=timeframe,
+        cache_dir=cache_dir,
+        max_workers=8,
+        show_progress=True,
+    )
+
+    # Guardar parquet para carga rápida futura
+    os.makedirs(cache_dir, exist_ok=True)
+    df.to_parquet(cache_path)
+    print(f"  Datos guardados en: {cache_path}")
+    return df
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1095,58 +1149,74 @@ def main():
     """Función principal — ejecuta 3 iteraciones de backtesting."""
     print("\n" + "█"*70)
     print("  GOLD VOLUME FUSION ELITE — BACKTESTING ENGINE")
-    print("  3 Iteraciones | 10 años | XAUUSD (GC=F COMEX)")
-    print("  TFs: 15m, 30m, 1h, 2h, 3h, 4h")
+    print("  3 Iteraciones | XAUUSD")
+    print("  TFs: M15 (primario), M30, 1H, 2H, 4H + 1D (referencia)")
+    print("  Fuente M15: Dukascopy (10 años) | Fallback: yfinance (limitado)")
     print("█"*70 + "\n")
 
     os.makedirs("results", exist_ok=True)
 
     # ── DESCARGA DE DATOS ──────────────────────────────────────────
-    print("PASO 1: Descargando datos XAUUSD (GC=F COMEX)...")
+    print("PASO 1: Descargando datos XAUUSD...")
 
-    # Datos diarios para 10 años (volumen real COMEX)
+    # Datos diarios 10 años — yfinance GC=F (siempre disponibles)
     df_daily = download_data("GC=F", "2015-01-01", "2025-01-01", "1d")
 
-    # Datos horarios (máximo disponible ~730 días en yfinance)
-    print("\nDescargando datos horarios (1h)...")
+    # ── M15 desde Dukascopy (fuente correcta para la estrategia) ──
+    df_m15 = None
+    if _HAS_DUKASCOPY:
+        print("\nDescargando M15 desde Dukascopy CDN (puede tomar varios minutos)...")
+        try:
+            df_m15 = download_dukascopy_ohlcv(
+                start="2015-01-01", end="2025-01-01",
+                timeframe="15min", cache_dir="data/dukascopy",
+            )
+        except Exception as e:
+            print(f"  WARNING Dukascopy M15: {e}")
+
+    # ── Fallback: yfinance 1h → remuestrear ──────────────────────
+    df_1h = None
+    print("\nDescargando 1h desde yfinance (fallback/remuestreo)...")
     try:
-        df_1h = download_data("GC=F", "2022-01-01", "2025-01-01", "60m")
-        has_intraday = True
+        df_1h = download_data("GC=F", "2020-01-01", "2025-01-01", "60m")
     except Exception as e:
-        print(f"  WARNING: No hay datos intradiarios disponibles: {e}")
-        print("  Usando datos diarios para todos los timeframes")
-        df_1h = df_daily.copy()
-        has_intraday = False
+        print(f"  WARNING 1h yfinance: {e}")
 
     # ── PREPARAR TIMEFRAMES ────────────────────────────────────────
     print("\nPASO 2: Preparando timeframes...")
 
-    timeframes = {
-        "1D":    (df_daily.copy(), False),   # 10 años completos
-    }
+    timeframes = {}
 
-    if has_intraday and len(df_1h) > 500:
-        # Remuestrear desde 1h
-        for tf in ["2h", "3h", "4h"]:
+    # M15 (primario — objetivo de la estrategia)
+    if df_m15 is not None and len(df_m15) > 1000:
+        timeframes["M15"] = (df_m15.copy(), True)
+        print(f"  M15 (Dukascopy): {len(df_m15)} barras ✓ — TIMEFRAME PRIMARIO")
+        # Remuestrear M15 → M30, 1H, 2H, 4H
+        for tf_label, tf_rule in [("M30","30min"), ("1H","1h"), ("2H","2h"), ("4H","4h")]:
             try:
-                df_tf = resample_data(df_1h, tf)
-                timeframes[tf] = (df_tf, True)
-                print(f"  {tf}: {len(df_tf)} barras")
+                df_tf = resample_data(df_m15, tf_rule)
+                timeframes[tf_label] = (df_tf, True)
+                print(f"  {tf_label} (resample M15): {len(df_tf)} barras")
             except Exception as e:
-                print(f"  WARNING {tf}: {e}")
-
-        # Para 15m y 30m, intentar descargar
-        for tf_str, yf_int in [("30m", "30m"), ("15m", "15m")]:
+                print(f"  WARNING {tf_label}: {e}")
+    elif df_1h is not None and len(df_1h) > 500:
+        print("  WARNING: Dukascopy no disponible, usando yfinance 1h como base")
+        timeframes["1H"] = (df_1h.copy(), True)
+        for tf_label, tf_rule in [("2H","2h"), ("4H","4h")]:
             try:
-                df_tf = download_data("GC=F", "2023-06-01", "2025-01-01", yf_int)
-                if len(df_tf) > 200:
-                    timeframes[tf_str] = (df_tf, True)
-                    print(f"  {tf_str}: {len(df_tf)} barras")
+                df_tf = resample_data(df_1h, tf_rule)
+                timeframes[tf_label] = (df_tf, True)
+                print(f"  {tf_label}: {len(df_tf)} barras")
             except Exception as e:
-                print(f"  WARNING {tf_str}: {e}")
+                print(f"  WARNING {tf_label}: {e}")
 
-        timeframes["1h"] = (df_1h.copy(), True)
-        print(f"  1h: {len(df_1h)} barras")
+    # 1D siempre disponible (10 años, referencia)
+    timeframes["1D"] = (df_daily.copy(), False)
+    print(f"  1D (yfinance 10 años): {len(df_daily)} barras")
+
+    # TF primario para optimización y comparación
+    primary_tf = "M15" if "M15" in timeframes else ("1H" if "1H" in timeframes else "1D")
+    print(f"\n  TF primario para optimización: {primary_tf}")
 
     all_results = []
 
@@ -1160,9 +1230,6 @@ def main():
     params_v1 = PARAMS_V1.copy()
 
     iter1_results = []
-    iter1_trades  = {}
-    iter1_equity  = {}
-
     for tf_label, (df_tf, is_intra) in timeframes.items():
         r, trades, equity = run_backtest_iteration(
             df_tf, params_v1, "V1", tf_label, is_intra
@@ -1170,9 +1237,6 @@ def main():
         if isinstance(r, dict):
             all_results.append(r)
             iter1_results.append(r)
-        if not trades.empty:
-            iter1_trades[tf_label] = trades
-            iter1_equity[tf_label] = equity
 
     # ══════════════════════════════════════════════════════════════
     # ITERACIÓN 2 — Optimización de parámetros
@@ -1181,15 +1245,10 @@ def main():
     print("  ITERACIÓN 2 — Optimización de Parámetros")
     print("▓"*60)
 
-    # Usar el TF más largo para optimizar (daily tiene más barras)
-    primary_tf = "1D"
+    # Optimizar sobre el TF primario (M15 si disponible)
     df_opt, is_intra_opt = timeframes[primary_tf]
-
-    # Calcular indicadores una vez
     df_opt_with_ind = VolumeIndicators.add_all(df_opt.copy(), params_v1)
-
-    params_v2 = optimize_params(df_opt_with_ind, params_v1,
-                                 is_intraday=is_intra_opt)
+    params_v2 = optimize_params(df_opt_with_ind, params_v1, is_intraday=is_intra_opt)
 
     iter2_results = []
     for tf_label, (df_tf, is_intra) in timeframes.items():
@@ -1201,35 +1260,27 @@ def main():
             iter2_results.append(r)
 
     # ══════════════════════════════════════════════════════════════
-    # ITERACIÓN 3 — Refinamiento fino
+    # ITERACIÓN 3 — Refinamiento fino con PARAMS_V3
     # ══════════════════════════════════════════════════════════════
     print("\n" + "▓"*60)
-    print("  ITERACIÓN 3 — Refinamiento Fino (Parámetros Optimizados)")
+    print("  ITERACIÓN 3 — Refinamiento Fino (PARAMS_V3 del EA)")
     print("▓"*60)
 
-    # V3: Partir de PARAMS_V3 (parámetros verificados del EA) + ajustes dinámicos
     params_v3 = PARAMS_V3.copy()
-    print(f"\n  V3 base = PARAMS_V3: min_score={params_v3['min_score']}, "
+    print(f"\n  V3 base: min_score={params_v3['min_score']}, "
           f"obv_ma={params_v3['obv_ma_period']}, cmf_thr={params_v3['cmf_threshold']}, "
           f"filter_weekdays={params_v3['filter_weekdays']}")
 
-    # Ajustes dinámicos basados en resultados V2
-    v2_daily_res = next((r for r in iter2_results if r.get("tf") in ["1D","1h"]), None)
-    if v2_daily_res:
-        sharpe_v2 = v2_daily_res.get("sharpe_ratio", 0)
-        dd_v2     = v2_daily_res.get("max_drawdown_pct", 99)
-        wr_v2     = v2_daily_res.get("win_rate_pct", 0)
-
-        print(f"\n  Análisis V2: Sharpe={sharpe_v2:.3f} MaxDD={dd_v2:.1f}% WinR={wr_v2:.1f}%")
-
+    # Ajustes dinámicos basados en V2 del TF primario
+    v2_primary = next((r for r in iter2_results if r.get("tf") == primary_tf), None)
+    if v2_primary:
+        sharpe_v2 = v2_primary.get("sharpe_ratio", 0)
+        dd_v2     = v2_primary.get("max_drawdown_pct", 99)
+        print(f"\n  Análisis V2 [{primary_tf}]: Sharpe={sharpe_v2:.3f} MaxDD={dd_v2:.1f}%")
         if dd_v2 > 7.0:
             print("  → MaxDD alto: reduciendo riesgo por trade")
             params_v3["risk_pct"] = max(0.25, params_v3["risk_pct"] * 0.85)
-
-        if sharpe_v2 < 0.8:
-            print("  → Sharpe bajo: verificar calidad de señal (V3 ya tiene min_score=6)")
-
-        if v2_daily_res.get("min_trades_month", 0) < OBJECTIVES["min_trades_month"]:
+        if v2_primary.get("min_trades_month", 0) < OBJECTIVES["min_trades_month"]:
             print("  → Pocos trades/mes: V3 ya tiene filter_weekdays=False")
 
     iter3_results = []
@@ -1246,9 +1297,8 @@ def main():
     # ══════════════════════════════════════════════════════════════
     print_summary_table(all_results)
 
-    # Comparar iteraciones en TF principal
     print("\n" + "="*70)
-    print("  COMPARACIÓN DE ITERACIONES — TF: " + primary_tf)
+    print(f"  COMPARACIÓN DE ITERACIONES — TF: {primary_tf}")
     print("="*70)
     for version in ["V1", "V2", "V3"]:
         r = next((x for x in all_results
@@ -1259,8 +1309,7 @@ def main():
             print(f"\n  {version}: {status}")
             print(f"    Sharpe={r['sharpe_ratio']:.3f}  MaxDD={r['max_drawdown_pct']:.1f}%  "
                   f"TotalRet={r['total_return_pct']:.1f}%")
-            print(f"    WinRate={r['win_rate_pct']:.1f}%  AvgRR={r['avg_rr']:.2f}  "
-                  f"PF={r['profit_factor']:.2f}")
+            print(f"    WinRate={r['win_rate_pct']:.1f}%  PF={r['profit_factor']:.2f}")
             print(f"    MinTrades/Mes={r['min_trades_month']}  "
                   f"WorstMon%={r['worst_month_ret_pct']:.1f}%  "
                   f"MaxDailyLoss={r['max_daily_loss_pct']:.2f}%")
@@ -1269,23 +1318,22 @@ def main():
     results_df = pd.DataFrame([r for r in all_results if "sharpe_ratio" in r])
     results_df.to_csv("results/backtest_volume_fusion_results.csv", index=False)
 
-    # Mejores parámetros de V3
     best_params_out = {
-        "version": "V3_final",
-        "strategy": "Gold Volume Fusion Elite",
-        "generated": datetime.now().isoformat(),
-        "params": params_v3,
+        "version":      "V3_final",
+        "strategy":     "Gold Volume Fusion Elite",
+        "primary_tf":   primary_tf,
+        "data_source":  "Dukascopy CDN" if _HAS_DUKASCOPY and df_m15 is not None else "yfinance fallback",
+        "generated":    datetime.now().isoformat(),
+        "params":       params_v3,
         "objectives_target": OBJECTIVES,
     }
 
-    # Métricas de V3 daily
-    v3_daily = next((r for r in iter3_results if r.get("tf") == primary_tf), {})
-    if "sharpe_ratio" in v3_daily:
-        best_params_out["metrics_v3_daily"] = {
-            k: v for k, v in v3_daily.items()
-            if k not in ["version", "tf"]
+    v3_primary = next((r for r in iter3_results if r.get("tf") == primary_tf), {})
+    if "sharpe_ratio" in v3_primary:
+        best_params_out["metrics_v3"] = {
+            k: v for k, v in v3_primary.items() if k not in ["version", "tf"]
         }
-        best_params_out["objectives_passed"] = check_objectives(v3_daily)
+        best_params_out["objectives_passed"] = check_objectives(v3_primary)
 
     with open("results/best_params_volume_fusion.json", "w") as f:
         json.dump(best_params_out, f, indent=2, default=str)
@@ -1294,18 +1342,9 @@ def main():
     print(f"  ├── backtest_volume_fusion_results.csv")
     print(f"  └── best_params_volume_fusion.json")
 
-    print("\n  PARÁMETROS FINALES PARA EA MT5 (V3):")
-    print(f"    MinScore     = {params_v3['min_score']}")
-    print(f"    SL ATR Mult  = {params_v3['sl_atr_mult']}")
-    print(f"    CMF Threshold= {params_v3['cmf_threshold']}")
-    print(f"    OBV MA Period= {params_v3['obv_ma_period']}")
-    print(f"    CMF Period   = {params_v3['cmf_period']}")
-    print(f"    VROC Period  = {params_v3['vroc_period']}")
-    print(f"    TP1 / TP2 / TP3 = {params_v3['tp1_ratio']} / {params_v3['tp2_ratio']} / {params_v3['tp3_ratio']}")
-    print(f"    Risk % / trade = {params_v3['risk_pct']}")
-
     return results_df, params_v3
 
 
 if __name__ == "__main__":
     results_df, best_params = main()
+

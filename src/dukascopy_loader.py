@@ -1,147 +1,276 @@
 """
 src/dukascopy_loader.py
 -----------------------
-Dukascopy data loader — interface + stub implementation.
+Dukascopy XAUUSD data loader — descarga ticks bi5 del CDN público de Dukascopy
+(sin credenciales, sin API key — datos gratuitos hasta ~20 años de historia).
 
-A full implementation would authenticate to Dukascopy JForex API (or
-scrape the public tick-data CSV endpoint at
-https://datafeed.dukascopy.com/datafeed/{instrument}/{year}/{month}/{day}/...
-).  That HTTP layer is left as a stub; replace ``_fetch_raw_ticks`` with
-a real implementation when credentials / network access is available.
+CDN público: https://datafeed.dukascopy.com/datafeed/{instrument}/{year}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5
+Formato bi5: LZMA-compressed, registros de 20 bytes cada uno:
+  [ms_offset: uint32, ask*1e5: uint32, bid*1e5: uint32, ask_vol: float32, bid_vol: float32]
 
-Interface:
-    DukascopyLoader(instrument, cfg) -> loader
-    loader.load(start, end) -> pd.DataFrame  (OHLCV with DatetimeIndex, UTC)
+Uso rápido:
+    from src.dukascopy_loader import download_xauusd_m15
+    df = download_xauusd_m15("2020-01-01", "2025-01-01", cache_dir="data/dukascopy")
+    # df → DataFrame OHLCV en M15, columnas: Open High Low Close Volume (tick vol)
 """
 
 from __future__ import annotations
 
+import io
 import logging
+import lzma
 import os
+import struct
+import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Constantes Dukascopy
+# ---------------------------------------------------------------------------
+
+# XAUUSD en Dukascopy se llama "XAUUSD"
+_CDN = "https://datafeed.dukascopy.com/datafeed/{instrument}/{year}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5"
+
+# XAUUSD: precio almacenado como int(precio * 1000)
+# Ejemplo: precio 2054.00 → almacenado como 2054000 → dividir por 1000
+# (EURUSD usaría 1e5, pero XAUUSD usa 1e3 por el rango de precio)
+_PRICE_DIV = 1000.0
+
 
 # ---------------------------------------------------------------------------
-# Abstract base — defines the contract any loader must satisfy
+# Abstract base
 # ---------------------------------------------------------------------------
 
 class BaseLoader(ABC):
-    """Minimal interface every data loader must satisfy."""
-
     @abstractmethod
     def load(self, start: str, end: Optional[str] = None) -> pd.DataFrame:
-        """
-        Return a DataFrame with columns [Open, High, Low, Close, Volume]
-        and a tz-aware UTC DatetimeIndex, covering [start, end].
-        """
+        """Retorna DataFrame OHLCV con DatetimeIndex UTC."""
 
 
 # ---------------------------------------------------------------------------
-# Dukascopy stub
+# Utilidad de decodificación bi5
+# ---------------------------------------------------------------------------
+
+def _decode_bi5(data: bytes, day_start_ms: int) -> pd.DataFrame:
+    """
+    Decodifica un archivo bi5 de Dukascopy.
+    Formato: registros de 20 bytes (big-endian):
+      uint32  ms_offset  — milisegundos desde inicio de la hora
+      uint32  ask * 1e5
+      uint32  bid * 1e5
+      float32 ask_volume
+      float32 bid_volume
+    """
+    if not data:
+        return pd.DataFrame()
+
+    try:
+        raw = lzma.decompress(data)
+    except lzma.LZMAError:
+        return pd.DataFrame()
+
+    n = len(raw) // 20
+    if n == 0:
+        return pd.DataFrame()
+
+    records = np.frombuffer(raw[:n * 20], dtype=">u4,>u4,>u4,>f4,>f4")
+    ms_offset = records["f0"].astype(np.int64)
+    ask       = records["f1"].astype(np.float64) / _PRICE_DIV
+    bid       = records["f2"].astype(np.float64) / _PRICE_DIV
+    ask_vol   = records["f3"].astype(np.float64)
+    bid_vol   = records["f4"].astype(np.float64)
+
+    timestamps = pd.to_datetime(day_start_ms + ms_offset, unit="ms", utc=True)
+    mid = (ask + bid) / 2.0
+    volume = ask_vol + bid_vol
+
+    return pd.DataFrame({
+        "timestamp": timestamps,
+        "price":     mid,
+        "volume":    volume,
+    })
+
+
+def _fetch_bi5(instrument: str, dt: datetime,
+               cache_dir: Optional[Path] = None,
+               retries: int = 2) -> bytes:
+    """
+    Descarga un archivo bi5 (1 hora de ticks) del CDN de Dukascopy.
+    Guarda en caché local si se proporciona cache_dir.
+    """
+    url = _CDN.format(
+        instrument=instrument,
+        year=dt.year,
+        month=dt.month - 1,   # Dukascopy usa mes 0-based (Ene=00)
+        day=dt.day,
+        hour=dt.hour,
+    )
+
+    # Caché en disco
+    if cache_dir is not None:
+        cache_path = cache_dir / f"{instrument}_{dt.strftime('%Y%m%d_%H')}.bi5"
+        if cache_path.exists():
+            return cache_path.read_bytes()
+
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer":    "https://www.dukascopy.com/",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+            if cache_dir is not None:
+                cache_path.write_bytes(data)
+            return data
+        except Exception:
+            if attempt < retries:
+                time.sleep(1.0)
+    return b""
+
+
+# ---------------------------------------------------------------------------
+# Función principal de descarga — XAUUSD M15
+# ---------------------------------------------------------------------------
+
+def download_xauusd_m15(
+    start: str,
+    end: str,
+    timeframe: str = "15min",
+    instrument: str = "XAUUSD",
+    cache_dir: str = "data/dukascopy",
+    max_workers: int = 4,
+    show_progress: bool = True,
+) -> pd.DataFrame:
+    """
+    Descarga datos XAUUSD del CDN público de Dukascopy y los remuestrea al timeframe pedido.
+
+    Parámetros
+    ----------
+    start      : "YYYY-MM-DD"  fecha inicio (UTC)
+    end        : "YYYY-MM-DD"  fecha fin    (UTC)
+    timeframe  : regla pandas  ("15min", "30min", "1h", "4h", …)  ← 3er arg posicional
+    instrument : "XAUUSD"      nombre en Dukascopy
+    cache_dir  : carpeta donde guardar los bi5 descargados (evita re-descargas)
+    max_workers: threads paralelos de descarga
+    show_progress: imprime progreso
+
+    Retorna
+    -------
+    pd.DataFrame con columnas [Open, High, Low, Close, Volume] e índice UTC.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    cache_path = Path(cache_dir) if cache_dir else None
+    if cache_path:
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+    start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end_dt   = datetime.strptime(end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+    # Generar lista de horas a descargar (lun-vie, 00-23 UTC)
+    hours = []
+    cur = start_dt
+    while cur < end_dt:
+        # Dukascopy no tiene datos de sábado 21:00+ ni domingo ~00:00-21:00
+        if cur.weekday() < 5 or (cur.weekday() == 6 and cur.hour >= 21):
+            hours.append(cur)
+        cur += timedelta(hours=1)
+
+    total = len(hours)
+    if show_progress:
+        print(f"  Dukascopy XAUUSD: descargando {total} horas ({start} → {end})...")
+
+    all_ticks = []
+    done = 0
+    failed = 0
+
+    def _worker(dt: datetime):
+        day_start_ms = int(dt.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
+        raw = _fetch_bi5(instrument, dt, cache_path)
+        return _decode_bi5(raw, day_start_ms)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_worker, h): h for h in hours}
+        for fut in as_completed(futures):
+            done += 1
+            df_h = fut.result()
+            if df_h is not None and not df_h.empty:
+                all_ticks.append(df_h)
+            else:
+                failed += 1
+            if show_progress and done % 500 == 0:
+                pct = done / total * 100
+                print(f"    {done}/{total} ({pct:.0f}%) — {len(all_ticks)} horas con datos")
+
+    if not all_ticks:
+        raise RuntimeError(
+            f"No se descargaron datos de Dukascopy. "
+            f"Verifica conectividad y que {instrument} sea válido."
+        )
+
+    ticks = pd.concat(all_ticks, ignore_index=True).sort_values("timestamp")
+    ticks.set_index("timestamp", inplace=True)
+
+    # Remuestrear a timeframe solicitado
+    ohlcv = ticks["price"].resample(timeframe).ohlc()
+    ohlcv.columns = ["Open", "High", "Low", "Close"]
+    ohlcv["Volume"] = ticks["volume"].resample(timeframe).sum()
+    ohlcv = ohlcv.dropna(subset=["Open"])
+    ohlcv = ohlcv[ohlcv["Volume"] > 0]
+
+    if show_progress:
+        print(f"  OK: {len(ohlcv)} barras {timeframe} "
+              f"desde {ohlcv.index[0]} hasta {ohlcv.index[-1]}")
+        print(f"  (Horas fallidas/sin datos: {failed}/{total})")
+
+    return ohlcv
+
+
+# ---------------------------------------------------------------------------
+# DukascopyLoader — compatible con la interfaz anterior
 # ---------------------------------------------------------------------------
 
 class DukascopyLoader(BaseLoader):
     """
-    Load OHLCV tick data from Dukascopy.
+    Loader OHLCV de Dukascopy usando el CDN público (sin credenciales).
 
-    Parameters
+    Parámetros
     ----------
-    instrument : str
-        Dukascopy instrument name, e.g. ``"XAUUSD"``.
-    cfg : dict
-        Loader config section from ``configs/data.yaml`` (``dukascopy`` key).
-    base_timeframe : str
-        Pandas resample rule for the base candle, e.g. ``"1min"``.
+    instrument    : str   — nombre en Dukascopy, p.ej. "XAUUSD"
+    cfg           : dict  — configuración (opcional, compatible con data.yaml)
+    base_timeframe: str   — regla pandas p.ej. "15min", "1h"
+    cache_dir     : str   — carpeta caché local
     """
-
-    _PUBLIC_URL = (
-        "https://datafeed.dukascopy.com/datafeed"
-        "/{instrument}/{year}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5"
-    )
 
     def __init__(
         self,
-        instrument: str,
-        cfg: dict,
-        base_timeframe: str = "1min",
+        instrument: str = "XAUUSD",
+        cfg: dict = None,
+        base_timeframe: str = "15min",
+        cache_dir: str = "data/dukascopy",
     ) -> None:
         self.instrument = instrument
-        self.cfg = cfg
+        self.cfg = cfg or {}
         self.base_timeframe = base_timeframe
-        self._user = os.environ.get("DUKASCOPY_USER", cfg.get("user", ""))
-        self._pass = os.environ.get("DUKASCOPY_PASS", cfg.get("password", ""))
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        self.cache_dir = cache_dir
 
     def load(self, start: str, end: Optional[str] = None) -> pd.DataFrame:
-        """
-        Return resampled OHLCV for *instrument* between *start* and *end*.
-
-        Currently returns an empty DataFrame with the correct schema
-        (stub).  Replace ``_fetch_raw_ticks`` to activate.
-        """
         end_dt = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        logger.warning(
-            "DukascopyLoader._fetch_raw_ticks is a stub. "
-            "Returning empty DataFrame for %s [%s → %s].",
-            self.instrument, start, end_dt,
-        )
-        ticks = self._fetch_raw_ticks(start, end_dt)
-        if ticks.empty:
-            return self._empty_ohlcv()
-        return self._resample_to_ohlcv(ticks)
-
-    # ------------------------------------------------------------------
-    # Internal helpers — override / complete these
-    # ------------------------------------------------------------------
-
-    def _fetch_raw_ticks(self, start: str, end: str) -> pd.DataFrame:
-        """
-        STUB — download bi5-compressed tick files from Dukascopy CDN.
-
-        A real implementation would:
-        1. Iterate over each UTC hour in [start, end].
-        2. Download ``<hour>h_ticks.bi5`` (LZMA-compressed binary).
-        3. Decode the 20-byte tick records: (ms_offset, ask*1e5, bid*1e5,
-           ask_vol, bid_vol).
-        4. Return a DataFrame with columns: [timestamp, bid, ask,
-           bid_volume, ask_volume].
-
-        Returns an **empty** DataFrame until implemented.
-        """
-        # TODO: implement HTTP fetch + bi5 decode
-        return pd.DataFrame(
-            columns=["timestamp", "bid", "ask", "bid_volume", "ask_volume"]
+        return download_xauusd_m15(
+            start=start,
+            end=end_dt,
+            timeframe=self.base_timeframe,
+            instrument=self.instrument,
+            cache_dir=self.cache_dir,
         )
 
-    def _resample_to_ohlcv(self, ticks: pd.DataFrame) -> pd.DataFrame:
-        """Convert a tick DataFrame into OHLCV candles."""
-        filter_col = self.cfg.get("tick_filter", "bid")
-        price = ticks.set_index("timestamp")[filter_col]
-        price.index = pd.to_datetime(price.index, utc=True)
-        volume_col = f"{filter_col}_volume"
-
-        ohlcv = price.resample(self.base_timeframe).ohlc()
-        ohlcv.columns = ["Open", "High", "Low", "Close"]
-        if volume_col in ticks.columns:
-            vol = (
-                ticks.set_index("timestamp")[volume_col]
-                .resample(self.base_timeframe)
-                .sum()
-            )
-            ohlcv["Volume"] = vol
-        else:
-            ohlcv["Volume"] = 0.0
-        return ohlcv.dropna(subset=["Open"])
-
-    @staticmethod
-    def _empty_ohlcv() -> pd.DataFrame:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
