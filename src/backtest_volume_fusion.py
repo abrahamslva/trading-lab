@@ -79,6 +79,19 @@ PARAMS_V1 = {
     "adr_max_used":      0.65,
 }
 
+# ──────────────────────────────────────────────────────────────────
+# PARÁMETROS V3 — coinciden exactamente con EA_XAUUSD_GoldVolumeFusionElite_v3_FINAL.mq5
+# ──────────────────────────────────────────────────────────────────
+PARAMS_V3 = {**PARAMS_V1,
+    "obv_ma_period":   30,     # [V3: 20→30]
+    "cmf_threshold":   0.08,   # [V3: 0.05→0.08]
+    "tp1_ratio":       2.5,    # [V3: 2.0→2.5]
+    "tp2_ratio":       3.5,    # [V3: 4.0→3.5]
+    "tp3_ratio":       8.0,    # [V3: 6.5→8.0]
+    "min_score":       6,      # [V3: 5→6 mayor selectividad]
+    "filter_weekdays": False,  # [V3: True→False mayor frecuencia]
+}
+
 # Objetivos objetivo (del objectives.yaml)
 OBJECTIVES = {
     "min_sharpe":         1.0,
@@ -123,11 +136,27 @@ def download_data(symbol: str = "GC=F",
     if df.empty:
         raise ValueError(f"No se pudieron descargar datos para {symbol} {interval}")
 
-    # Aplanar MultiIndex si existe
+    # Aplanar MultiIndex (distintas versiones de yfinance usan distintas estructuras)
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+        for level in range(df.columns.nlevels):
+            lvl = df.columns.get_level_values(level)
+            if any(str(c).lower() in ["open","high","low","close","volume"] for c in lvl):
+                df.columns = lvl
+                break
+        else:
+            df.columns = df.columns.get_level_values(0)
 
-    df = df[["Open","High","Low","Close","Volume"]].dropna()
+    # Normalizar nombres de columnas a Title Case
+    df.columns = [str(c).strip().title() for c in df.columns]
+
+    cols_needed = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
+    if len(cols_needed) < 5:
+        raise ValueError(f"Columnas insuficientes en datos descargados: {list(df.columns)}")
+    df = df[cols_needed].copy()
+
+    # Eliminar barras sin volumen o datos inválidos (evita divisiones por cero)
+    df = df[df["Volume"] > 0].dropna()
+
     df.index = pd.to_datetime(df.index, utc=True)
     print(f"  OK: {len(df)} barras desde {df.index[0]} hasta {df.index[-1]}")
     return df
@@ -174,14 +203,12 @@ class VolumeIndicators:
     def vwap_daily(df: pd.DataFrame) -> pd.DataFrame:
         """VWAP con reset diario (a las 22:00 UTC = apertura Asia)."""
         tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
-        # Grupo por día de trading (apertura 22:00 UTC)
-        df["_trading_day"] = (df.index.hour < 22).astype(int)
-        df["_day_label"] = (df.index.date.astype(str))
-        # Ajuste: si hora >= 22, pertenece al "día siguiente de trading"
-        adjusted = df.index - pd.Timedelta(hours=22)
-        day_group = adjusted.date
+        # Reset a las 22:00 UTC (apertura Asia); floor('D') funciona con índices tz-aware
+        adjusted  = df.index - pd.Timedelta(hours=22)
+        day_group = adjusted.floor("D")
 
-        cumsum_pv = (tp * df["Volume"]).groupby(day_group).cumsum()
+        tp_vol    = tp * df["Volume"]
+        cumsum_pv = tp_vol.groupby(day_group).cumsum()
         cumsum_v  = df["Volume"].groupby(day_group).cumsum()
         df["VWAP"] = cumsum_pv / cumsum_v.replace(0, np.nan)
         df.drop(columns=["_trading_day", "_day_label"], inplace=True, errors="ignore")
@@ -383,9 +410,25 @@ class VolumeIndicators:
         df["EMA50"]  = df["Close"].ewm(span=50,  adjust=False).mean()
         df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
-        # ADR para filtro (usa datos diarios del mismo df)
-        df["DailyRange"] = df["High"] - df["Low"]
-        df["ADR"] = df["DailyRange"].rolling(p["adr_period"]).mean()
+        # ADR correcto: resampling a diario (igual que el EA que usa PERIOD_D1)
+        # Evita el bug de comparar rango de barra intradiaria vs ADR diario
+        df_d = df[["High","Low"]].resample("1D").agg({"High":"max","Low":"min"}).dropna()
+        df_d["DailyRange"] = df_d["High"] - df_d["Low"]
+        df_d["ADR"]        = df_d["DailyRange"].rolling(p["adr_period"]).mean()
+
+        # Mapear ADR por fecha (string evita problemas de timezone en el join)
+        df_d["_date"] = df_d.index.strftime("%Y-%m-%d")
+        df["_date"]   = df.index.strftime("%Y-%m-%d")
+        adr_map = dict(zip(df_d["_date"], df_d["ADR"]))
+        df["ADR"] = df["_date"].map(adr_map).ffill()
+        df.drop(columns=["_date"], inplace=True, errors="ignore")
+
+        # Rango acumulado del día actual (cummax/cummin desde apertura de cada día)
+        # Reproduce el PERIOD_D1 High/Low del EA: iHigh(D1,0) y iLow(D1,0) en tiempo real
+        _date_key = df.index.strftime("%Y-%m-%d")
+        df["DayHigh"]    = df["High"].groupby(_date_key).cummax()
+        df["DayLow"]     = df["Low"].groupby(_date_key).cummin()
+        df["TodayRange"] = df["DayHigh"] - df["DayLow"]
 
         return df
 
@@ -617,9 +660,16 @@ class GoldBacktester:
 
     def _adr_filter(self, row: pd.Series) -> bool:
         """No entrar si el rango del día ya superó el límite del ADR."""
+        # Para datos diarios el ADR filter no aplica (la barra YA es el día completo)
+        if not self.is_intraday:
+            return True
         if pd.isna(row.get("ADR")) or row["ADR"] == 0:
             return True
-        today_range = row["High"] - row["Low"]
+        # Usar rango acumulado del día (TodayRange), NO el rango de la barra actual
+        # Bug original: usaba H-L de la barra → siempre ≈ ADR → rechazaba todo
+        today_range = row.get("TodayRange", np.nan)
+        if pd.isna(today_range) or today_range == 0:
+            today_range = row["High"] - row["Low"]
         return (today_range / row["ADR"]) < self.p["adr_max_used"]
 
     def _calc_lot_size(self, price: float, sl_dist: float) -> float:
@@ -978,8 +1028,8 @@ def run_backtest_iteration(df_raw: pd.DataFrame,
         trades = bt.run(verbose=True)
 
         if trades.empty:
-            print(f"  [{version}] Sin trades generados")
-            return {"version": version, "tf": tf_label, "trades": 0}
+            print(f"  [{version}] Sin trades generados — revisar sesión/score/datos")
+            return {"version": version, "tf": tf_label, "total_trades": 0}, pd.DataFrame(), []
 
         metrics  = compute_metrics(trades, bt.equity_curve, initial_balance)
         obj_pass = check_objectives(metrics)
@@ -1157,11 +1207,14 @@ def main():
     print("  ITERACIÓN 3 — Refinamiento Fino (Parámetros Optimizados)")
     print("▓"*60)
 
-    # Refinamiento basado en los resultados de V2
-    params_v3 = params_v2.copy()
+    # V3: Partir de PARAMS_V3 (parámetros verificados del EA) + ajustes dinámicos
+    params_v3 = PARAMS_V3.copy()
+    print(f"\n  V3 base = PARAMS_V3: min_score={params_v3['min_score']}, "
+          f"obv_ma={params_v3['obv_ma_period']}, cmf_thr={params_v3['cmf_threshold']}, "
+          f"filter_weekdays={params_v3['filter_weekdays']}")
 
-    # Análisis de los trades V2 para ajustar
-    v2_daily_res = next((r for r in iter2_results if r.get("tf") == "1D"), None)
+    # Ajustes dinámicos basados en resultados V2
+    v2_daily_res = next((r for r in iter2_results if r.get("tf") in ["1D","1h"]), None)
     if v2_daily_res:
         sharpe_v2 = v2_daily_res.get("sharpe_ratio", 0)
         dd_v2     = v2_daily_res.get("max_drawdown_pct", 99)
@@ -1170,23 +1223,14 @@ def main():
         print(f"\n  Análisis V2: Sharpe={sharpe_v2:.3f} MaxDD={dd_v2:.1f}% WinR={wr_v2:.1f}%")
 
         if dd_v2 > 7.0:
-            print("  → MaxDD alto: reduciendo riesgo por trade y ajustando SL")
-            params_v3["risk_pct"]    = max(0.25, params_v2["risk_pct"] * 0.8)
-            params_v3["sl_atr_mult"] = min(2.5, params_v2["sl_atr_mult"] * 1.1)
+            print("  → MaxDD alto: reduciendo riesgo por trade")
+            params_v3["risk_pct"] = max(0.25, params_v3["risk_pct"] * 0.85)
 
         if sharpe_v2 < 0.8:
-            print("  → Sharpe bajo: aumentando selectividad de señal")
-            params_v3["min_score"] = min(7, params_v2["min_score"] + 1)
-            params_v3["cmf_threshold"] = min(0.08, params_v2["cmf_threshold"] * 1.2)
-
-        if wr_v2 < 50:
-            print("  → Win rate bajo: mejorando filtros")
-            params_v3["min_score"] = min(7, params_v2["min_score"] + 1)
+            print("  → Sharpe bajo: verificar calidad de señal (V3 ya tiene min_score=6)")
 
         if v2_daily_res.get("min_trades_month", 0) < OBJECTIVES["min_trades_month"]:
-            print("  → Pocos trades/mes: reduciendo score mínimo")
-            params_v3["min_score"] = max(3, params_v2["min_score"] - 1)
-            params_v3["filter_weekdays"] = False  # Permitir más días
+            print("  → Pocos trades/mes: V3 ya tiene filter_weekdays=False")
 
     iter3_results = []
     for tf_label, (df_tf, is_intra) in timeframes.items():
