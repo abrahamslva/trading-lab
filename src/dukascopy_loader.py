@@ -210,7 +210,7 @@ def download_xauusd_m15(
 
     def _worker(dt: datetime):
         day_start_ms = int(dt.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
-        raw = _fetch_bi5(instrument, dt, cache_path, save_bi5=save_bi5)
+        raw = _fetch_bi5(instrument, dt, cache_path if save_bi5 else None, save_bi5=save_bi5)
         return _decode_bi5(raw, day_start_ms)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
