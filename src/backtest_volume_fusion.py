@@ -41,6 +41,17 @@ except ImportError:
     except ImportError:
         _HAS_DUKASCOPY = False
 
+# MT5 Data Client (fuente preferida — conexión directa a MetaTrader 5)
+try:
+    from src.mt5_data_client import get_mt5_client as _get_mt5_client
+    _HAS_MT5_CLIENT = True
+except ImportError:
+    try:
+        from mt5_data_client import get_mt5_client as _get_mt5_client
+        _HAS_MT5_CLIENT = True
+    except ImportError:
+        _HAS_MT5_CLIENT = False
+
 # ──────────────────────────────────────────────────────────────────
 # PARÁMETROS — Iteración 1 (base)
 # ──────────────────────────────────────────────────────────────────
@@ -1150,84 +1161,124 @@ def main():
     """Función principal — ejecuta 3 iteraciones de backtesting."""
     print("\n" + "█"*70)
     print("  GOLD VOLUME FUSION ELITE — BACKTESTING ENGINE")
-    print("  3 Iteraciones | XAUUSD")
-    print("  TFs: M15 (primario), M30, 1H, 2H, 4H + 1D (referencia)")
-    print("  Fuente M15: Dukascopy (10 años) | Fallback: yfinance (limitado)")
+    print("  3 Iteraciones | XAUUSD | 10 años")
+    print("  TFs: 15min, 30min, 1H, 2H, 3H, 4H, 1D")
+    print("  Fuente #1: MT5 Data Server | #2: Parquet MT5 | #3: Dukascopy | #4: yfinance")
     print("█"*70 + "\n")
 
     os.makedirs("results", exist_ok=True)
 
-    # ── DESCARGA DE DATOS ──────────────────────────────────────────
-    print("PASO 1: Descargando datos XAUUSD...")
+    # ══════════════════════════════════════════════════════════════
+    # PASO 1 — OBTENER DATOS (prioridad: MT5 Server > Parquet > Dukascopy > yfinance)
+    # ══════════════════════════════════════════════════════════════
+    print("PASO 1: Obteniendo datos XAUUSD 10 años...")
 
-    # Datos diarios 10 años — yfinance GC=F (siempre disponibles)
-    df_daily = download_data("GC=F", "2015-01-01", "2025-01-01", "1d")
+    timeframes = {}    # {"label": (df, is_intraday)}
+    _mt5_client = None
 
-    # ── M15: primero MT5 parquet, luego Dukascopy CDN ────────────
-    df_m15 = None
-    _MT5_PARQUET = Path("data/dukascopy/XAUUSD_15min_mt5.parquet")
-    if _MT5_PARQUET.exists():
-        print(f"\nCargando M15 desde MT5 parquet ({_MT5_PARQUET})...")
+    # ── FUENTE 1: MT5 Data Server (conexión directa a MetaTrader 5) ──
+    if _HAS_MT5_CLIENT:
+        _mt5_client = _get_mt5_client()
+
+    if _mt5_client is not None:
+        print("\n  ► Fuente: MT5 Data Server (conexión directa — todos los TFs en RAM)")
         try:
-            df_m15 = pd.read_parquet(_MT5_PARQUET)
-            print(f"  OK: {len(df_m15)} barras desde {df_m15.index[0].date()} hasta {df_m15.index[-1].date()}")
+            mt5_data = _mt5_client.get_all_timeframes(
+                symbol="XAUUSD",
+                years=10,
+                timeframes=["15min", "30min", "1h", "2h", "3h", "4h", "1d"],
+                verbose=True,
+            )
+            # Mapear a nombres internos
+            _TF_LABELS = {
+                "15min": ("M15", True),
+                "30min": ("M30", True),
+                "1h":    ("1H",  True),
+                "2h":    ("2H",  True),
+                "3h":    ("3H",  True),
+                "4h":    ("4H",  True),
+                "1d":    ("1D",  False),
+            }
+            for tf_key, (label, is_intra) in _TF_LABELS.items():
+                if tf_key in mt5_data and len(mt5_data[tf_key]) > 100:
+                    timeframes[label] = (mt5_data[tf_key], is_intra)
         except Exception as e:
-            print(f"  WARNING leyendo parquet MT5: {e}")
-            df_m15 = None
+            print(f"  WARNING MT5 Server: {e}")
+            _mt5_client = None
 
-    if df_m15 is None and _HAS_DUKASCOPY:
-        print("\nDescargando M15 desde Dukascopy CDN (puede tomar varios minutos)...")
+    # ── FUENTE 2: Parquet MT5 exportado con export_history_to_parquet.py ──
+    if not timeframes:
+        _MT5_PARQUET = Path("data/dukascopy/XAUUSD_15min_mt5.parquet")
+        if _MT5_PARQUET.exists():
+            print(f"\n  ► Fuente: Parquet MT5 ({_MT5_PARQUET})")
+            try:
+                df_m15 = pd.read_parquet(_MT5_PARQUET)
+                print(f"    M15: {len(df_m15)} barras  "
+                      f"{df_m15.index[0].date()} → {df_m15.index[-1].date()}")
+                timeframes["M15"] = (df_m15, True)
+                for label, rule in [("M30","30min"),("1H","1h"),("2H","2h"),
+                                     ("3H","3h"),("4H","4h"),("1D","1d")]:
+                    try:
+                        timeframes[label] = (resample_data(df_m15, rule), label != "1D")
+                        print(f"    {label}: {len(timeframes[label][0])} barras (remuestreado)")
+                    except Exception as e:
+                        print(f"    WARNING remuestreo {label}: {e}")
+            except Exception as e:
+                print(f"  WARNING leyendo parquet MT5: {e}")
+
+    # ── FUENTE 3: Dukascopy CDN (bi5 en RAM → parquet) ────────────
+    if not timeframes and _HAS_DUKASCOPY:
+        print("\n  ► Fuente: Dukascopy CDN (descargando en RAM, sin archivos bi5...)")
         try:
             df_m15 = download_dukascopy_ohlcv(
-                start="2015-01-01", end="2025-01-01",
+                start="2016-01-01", end="2026-01-01",
                 timeframe="15min", cache_dir="data/dukascopy",
             )
+            timeframes["M15"] = (df_m15, True)
+            for label, rule in [("M30","30min"),("1H","1h"),("2H","2h"),
+                                 ("3H","3h"),("4H","4h"),("1D","1d")]:
+                try:
+                    timeframes[label] = (resample_data(df_m15, rule), label != "1D")
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"  WARNING Dukascopy M15: {e}")
+            print(f"  WARNING Dukascopy: {e}")
 
-    # ── Fallback: yfinance 1h → remuestrear ──────────────────────
-    df_1h = None
-    print("\nDescargando 1h desde yfinance (fallback/remuestreo)...")
-    try:
-        df_1h = download_data("GC=F", "2020-01-01", "2025-01-01", "60m")
-    except Exception as e:
-        print(f"  WARNING 1h yfinance: {e}")
+    # ── FUENTE 4: yfinance (fallback — datos limitados) ────────────
+    if not timeframes:
+        print("\n  ► Fuente: yfinance (fallback — datos limitados)")
+        df_daily = download_data("GC=F", "2016-01-01", "2026-01-01", "1d")
+        timeframes["1D"] = (df_daily, False)
+        try:
+            df_1h = download_data("GC=F", "2022-01-01", "2026-01-01", "60m")
+            timeframes["1H"] = (df_1h, True)
+            for label, rule in [("2H","2h"),("3H","3h"),("4H","4h")]:
+                try:
+                    timeframes[label] = (resample_data(df_1h, rule), True)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  WARNING yfinance 1h: {e}")
+    elif "1D" not in timeframes:
+        # Siempre tener 1D con yfinance (10 años garantizados)
+        try:
+            df_daily = download_data("GC=F", "2016-01-01", "2026-01-01", "1d")
+            timeframes["1D"] = (df_daily, False)
+        except Exception:
+            pass
 
-    # ── PREPARAR TIMEFRAMES ────────────────────────────────────────
-    print("\nPASO 2: Preparando timeframes...")
+    if not timeframes:
+        raise RuntimeError("No se pudo obtener datos de ninguna fuente.")
 
-    timeframes = {}
+    print(f"\n  Fuentes cargadas: {list(timeframes.keys())}")
 
-    # M15 (primario — objetivo de la estrategia)
-    if df_m15 is not None and len(df_m15) > 1000:
-        timeframes["M15"] = (df_m15.copy(), True)
-        print(f"  M15 (Dukascopy): {len(df_m15)} barras ✓ — TIMEFRAME PRIMARIO")
-        # Remuestrear M15 → M30, 1H, 2H, 4H
-        for tf_label, tf_rule in [("M30","30min"), ("1H","1h"), ("2H","2h"), ("4H","4h")]:
-            try:
-                df_tf = resample_data(df_m15, tf_rule)
-                timeframes[tf_label] = (df_tf, True)
-                print(f"  {tf_label} (resample M15): {len(df_tf)} barras")
-            except Exception as e:
-                print(f"  WARNING {tf_label}: {e}")
-    elif df_1h is not None and len(df_1h) > 500:
-        print("  WARNING: Dukascopy no disponible, usando yfinance 1h como base")
-        timeframes["1H"] = (df_1h.copy(), True)
-        for tf_label, tf_rule in [("2H","2h"), ("4H","4h")]:
-            try:
-                df_tf = resample_data(df_1h, tf_rule)
-                timeframes[tf_label] = (df_tf, True)
-                print(f"  {tf_label}: {len(df_tf)} barras")
-            except Exception as e:
-                print(f"  WARNING {tf_label}: {e}")
+    # Determinar TF primario
+    for _prim in ["M15", "1H", "1D"]:
+        if _prim in timeframes:
+            primary_tf = _prim
+            break
 
-    # 1D siempre disponible (10 años, referencia)
-    timeframes["1D"] = (df_daily.copy(), False)
-    print(f"  1D (yfinance 10 años): {len(df_daily)} barras")
-
-    # TF primario para optimización y comparación
-    primary_tf = "M15" if "M15" in timeframes else ("1H" if "1H" in timeframes else "1D")
-    print(f"\n  TF primario para optimización: {primary_tf}")
+    print(f"  TF primario para optimización: {primary_tf}")
 
     all_results = []
 

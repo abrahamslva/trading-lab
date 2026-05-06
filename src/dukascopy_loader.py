@@ -102,10 +102,11 @@ def _decode_bi5(data: bytes, day_start_ms: int) -> pd.DataFrame:
 
 def _fetch_bi5(instrument: str, dt: datetime,
                cache_dir: Optional[Path] = None,
-               retries: int = 2) -> bytes:
+               retries: int = 2,
+               save_bi5: bool = False) -> bytes:
     """
     Descarga un archivo bi5 (1 hora de ticks) del CDN de Dukascopy.
-    Guarda en caché local si se proporciona cache_dir.
+    Guarda en caché local solo si save_bi5=True y cache_dir está definido.
     """
     url = _CDN.format(
         instrument=instrument,
@@ -115,8 +116,8 @@ def _fetch_bi5(instrument: str, dt: datetime,
         hour=dt.hour,
     )
 
-    # Caché en disco
-    if cache_dir is not None:
+    # Caché en disco (solo si save_bi5=True)
+    if cache_dir is not None and save_bi5:
         cache_path = cache_dir / f"{instrument}_{dt.strftime('%Y%m%d_%H')}.bi5"
         if cache_path.exists():
             return cache_path.read_bytes()
@@ -129,7 +130,8 @@ def _fetch_bi5(instrument: str, dt: datetime,
             })
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = resp.read()
-            if cache_dir is not None:
+            if cache_dir is not None and save_bi5:
+                cache_path = cache_dir / f"{instrument}_{dt.strftime('%Y%m%d_%H')}.bi5"
                 cache_path.write_bytes(data)
             return data
         except Exception:
@@ -150,19 +152,23 @@ def download_xauusd_m15(
     cache_dir: str = "data/dukascopy",
     max_workers: int = 4,
     show_progress: bool = True,
+    save_bi5: bool = False,
+    save_parquet: bool = True,
 ) -> pd.DataFrame:
     """
     Descarga datos XAUUSD del CDN público de Dukascopy y los remuestrea al timeframe pedido.
 
     Parámetros
     ----------
-    start      : "YYYY-MM-DD"  fecha inicio (UTC)
-    end        : "YYYY-MM-DD"  fecha fin    (UTC)
-    timeframe  : regla pandas  ("15min", "30min", "1h", "4h", …)  ← 3er arg posicional
-    instrument : "XAUUSD"      nombre en Dukascopy
-    cache_dir  : carpeta donde guardar los bi5 descargados (evita re-descargas)
-    max_workers: threads paralelos de descarga
+    start        : "YYYY-MM-DD"  fecha inicio (UTC)
+    end          : "YYYY-MM-DD"  fecha fin    (UTC)
+    timeframe    : regla pandas  ("15min", "30min", "1h", "4h", …)
+    instrument   : nombre en Dukascopy
+    cache_dir    : carpeta para guardar el parquet final (y bi5 si save_bi5=True)
+    max_workers  : threads paralelos de descarga
     show_progress: imprime progreso
+    save_bi5     : si True guarda cada hora como .bi5 en cache_dir (mucho espacio)
+    save_parquet : si True guarda el resultado OHLCV como .parquet (recomendado)
 
     Retorna
     -------
@@ -173,6 +179,14 @@ def download_xauusd_m15(
     cache_path = Path(cache_dir) if cache_dir else None
     if cache_path:
         cache_path.mkdir(parents=True, exist_ok=True)
+
+    # Si ya existe el parquet, cargarlo directamente
+    if cache_path and save_parquet:
+        parquet_file = cache_path / f"{instrument}_{timeframe}_{start}_{end}.parquet"
+        if parquet_file.exists():
+            if show_progress:
+                print(f"  Cargando desde parquet: {parquet_file}")
+            return pd.read_parquet(parquet_file)
 
     start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     end_dt   = datetime.strptime(end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -196,7 +210,7 @@ def download_xauusd_m15(
 
     def _worker(dt: datetime):
         day_start_ms = int(dt.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
-        raw = _fetch_bi5(instrument, dt, cache_path)
+        raw = _fetch_bi5(instrument, dt, cache_path, save_bi5=save_bi5)
         return _decode_bi5(raw, day_start_ms)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -232,6 +246,14 @@ def download_xauusd_m15(
         print(f"  OK: {len(ohlcv)} barras {timeframe} "
               f"desde {ohlcv.index[0]} hasta {ohlcv.index[-1]}")
         print(f"  (Horas fallidas/sin datos: {failed}/{total})")
+
+    # Guardar parquet para recargas futuras instantáneas
+    if cache_path and save_parquet:
+        parquet_file = cache_path / f"{instrument}_{timeframe}_{start}_{end}.parquet"
+        ohlcv.to_parquet(parquet_file)
+        size_mb = parquet_file.stat().st_size / 1024 / 1024
+        if show_progress:
+            print(f"  Parquet guardado: {parquet_file} ({size_mb:.1f} MB)")
 
     return ohlcv
 
