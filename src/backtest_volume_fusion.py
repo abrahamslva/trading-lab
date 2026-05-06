@@ -27,6 +27,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import json
 import os
+from pathlib import Path
 import sys
 
 # Dukascopy loader (M15 histórico sin límite de tiempo)
@@ -1162,9 +1163,19 @@ def main():
     # Datos diarios 10 años — yfinance GC=F (siempre disponibles)
     df_daily = download_data("GC=F", "2015-01-01", "2025-01-01", "1d")
 
-    # ── M15 desde Dukascopy (fuente correcta para la estrategia) ──
+    # ── M15: primero MT5 parquet, luego Dukascopy CDN ────────────
     df_m15 = None
-    if _HAS_DUKASCOPY:
+    _MT5_PARQUET = Path("data/dukascopy/XAUUSD_15min_mt5.parquet")
+    if _MT5_PARQUET.exists():
+        print(f"\nCargando M15 desde MT5 parquet ({_MT5_PARQUET})...")
+        try:
+            df_m15 = pd.read_parquet(_MT5_PARQUET)
+            print(f"  OK: {len(df_m15)} barras desde {df_m15.index[0].date()} hasta {df_m15.index[-1].date()}")
+        except Exception as e:
+            print(f"  WARNING leyendo parquet MT5: {e}")
+            df_m15 = None
+
+    if df_m15 is None and _HAS_DUKASCOPY:
         print("\nDescargando M15 desde Dukascopy CDN (puede tomar varios minutos)...")
         try:
             df_m15 = download_dukascopy_ohlcv(
