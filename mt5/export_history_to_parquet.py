@@ -26,12 +26,31 @@ except ImportError:
     sys.exit(1)
 
 # ── Configuración ──────────────────────────────────────────────────────────
-SYMBOL     = "XAUUSD"
-TIMEFRAME  = mt5.TIMEFRAME_M15
-START_DATE = datetime(2015, 1, 1)   # MT5 en Windows NO acepta tzinfo — usar naive
-END_DATE   = datetime.now()
-OUT_FILE   = Path(__file__).parent.parent / "data" / "dukascopy" / "XAUUSD_15min_mt5.parquet"
+SYMBOL    = "XAUUSD"
+TIMEFRAME = mt5.TIMEFRAME_M15
+END_DATE  = datetime.now()
+OUT_FILE  = Path(__file__).parent.parent / "data" / "dukascopy" / "XAUUSD_15min_mt5.parquet"
+
+# Años candidatos para buscar el inicio del historial disponible (de más antiguo a más reciente)
+CANDIDATE_YEARS = [2015, 2017, 2019, 2020, 2021, 2022, 2023, 2024]
 # ──────────────────────────────────────────────────────────────────────────
+
+
+def detect_start_date(symbol: str, timeframe: int, end_date: datetime) -> datetime:
+    """Prueba años candidatos y devuelve el más antiguo con datos disponibles."""
+    print("Detectando historial disponible en el broker...")
+    for year in CANDIDATE_YEARS:
+        candidate = datetime(year, 1, 1)
+        rates = mt5.copy_rates_range(symbol, timeframe, candidate, datetime(year, 1, 8))
+        if rates is not None and len(rates) > 0:
+            print(f"  ✓ Historial disponible desde al menos {year}")
+            return candidate
+        else:
+            print(f"  ✗ Sin datos en {year}: {mt5.last_error()}")
+    # Fallback: usar el año más reciente de los candidatos
+    fallback = datetime(CANDIDATE_YEARS[-1], 1, 1)
+    print(f"  → Usando fallback: {fallback.date()}")
+    return fallback
 
 
 def main():
@@ -43,10 +62,13 @@ def main():
 
     info = mt5.terminal_info()
     print(f"Conectado a: {info.name}  build={info.build}")
-    print(f"Descargando {SYMBOL} M15 desde {START_DATE.date()} hasta {END_DATE.date()}...")
 
     # Asegurar que el símbolo está visible en Market Watch
     mt5.symbol_select(SYMBOL, True)
+
+    # Auto-detectar fecha de inicio disponible
+    START_DATE = detect_start_date(SYMBOL, TIMEFRAME, END_DATE)
+    print(f"Descargando {SYMBOL} M15 desde {START_DATE.date()} hasta {END_DATE.date()}...")
 
     # Descargar barras
     rates = mt5.copy_rates_range(SYMBOL, TIMEFRAME, START_DATE, END_DATE)
