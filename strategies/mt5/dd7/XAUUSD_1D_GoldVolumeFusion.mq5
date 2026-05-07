@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|  XAUUSD_1D_GoldVolumeFusion.mq5                                   |
-//|  Estrategia Ganadora 1D — XAUUSD  (Gold Volume Fusion V3)        |
+//|  Estrategia Experimental 1D ❌ NO PASA DD — XAUUSD  (Gold Volume Fusion V3)        |
 //|                                                                    |
 //|  SEÑAL: Fusión de 5 indicadores de volumen (sistema de puntos)    |
 //|    OBV > OBV_MA  → +1 punto (On Balance Volume)                  |
@@ -17,11 +17,11 @@
 //|    Score mínimo = 4 | CMF threshold = 0.05                        |
 //|    Riesgo = 1% del balance por trade                              |
 //|                                                                    |
-//|  RESULTADOS VERIFICADOS:                                           |
-//|    Retorno promedio : +11.73%/mes  ✓  (EXCEPCIONAL)              |
-//|    Max Drawdown     :  -7.01%      ✓                               |
-//|    Trades/mes       :   26.2       ✓                               |
-//|    Win Rate         :   83.4%      (EXCEPCIONAL)                   |
+//|  ⚠️  BACKTEST REAL (NO pasa objetivos DD):                        |
+//|    Retorno promedio : +1.12%/mes  ❌ (NO pasa objetivo ≥2%)       |
+//|    Max Drawdown     : -27.84%  ❌ (objetivo ≤-7%)                 |
+//|    Trades/mes       :    8.2       ✓                               |
+//|    Win Rate         :   26.5%  ← BAJO (solo 28% meses positivos)  |
 //|                                                                    |
 //|  INSTRUCCIONES MT5:                                                |
 //|    1. Copiar a: MetaTrader5/MQL5/Experts/                         |

@@ -19,7 +19,7 @@
 //|                                                                    |
 //|  RESULTADOS VERIFICADOS:                                           |
 //|    Retorno promedio : ~+6.0%  ✓  (EXCEPCIONAL)              |
-//|    Max Drawdown     :  -7.01%      ✓                               |
+//|    Max Drawdown     : ~-14%  ❌ (objetivo ≤-5%)                   |
 //|    Trades/mes       :   26.2       ✓                               |
 //|    Win Rate         :   83.4%      (EXCEPCIONAL)                   |
 //|                                                                    |
