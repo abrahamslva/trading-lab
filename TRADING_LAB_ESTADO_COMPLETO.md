@@ -263,14 +263,79 @@ Descarga por chunks:
 
 | Archivo | Descripción | Última ejecución |
 |---------|-------------|-----------------|
-| `results/backtest_all_strategies_2016_2024.csv` | Todas las estrategias 2016-2024 | ✅ |
+| `results/backtest_all_strategies_2016_2026.csv` | **9 estrategias MA-Cross × 6 TF — 2016-2026** | ✅ 2026-05-07 |
+| `results/backtest_all_strategies_2016_2024.csv` | 9 estrategias MA-Cross × 6 TF — 2016-2024 (antiguo) | ✅ |
+| `results/backtest_volume_fusion_results.csv` | GoldVolumeFusion 3 iteraciones × 7 TF | ✅ |
 | `results/backtest_full_results.csv` | Backtest completo | ✅ |
 | `results/backtest_m15_real_yfinance.csv` | M15 con datos reales yfinance | ✅ |
-| `results/backtest_volume_fusion_results.csv` | GoldVolumeFusion específico | ✅ |
 | `results/backtest_v3_2016_2024_multiframe.csv` | v3 multiframe 2016-2024 | ✅ |
 | `results/best_params_volume_fusion.json` | Mejores params optimizados | ✅ |
 | `results/backtest_full_params.json` | Params completos | ✅ |
 | `results/REPORTE_FINAL_GoldVolumeFusionElite.md` | Reporte final completo | ✅ |
+
+### Resultados Backtest MA-Cross V1-V9 — 2016-2026 (170,701 barras)
+
+**54 combinaciones (9 estrategias × 6 timeframes) — ninguna pasa todos los objetivos**  
+Objetivos: monthly ≥1.5% AND MaxDD ≤9% AND trades/mes ≥7 AND peor día ≥-5%
+
+#### TOP 10 por Retorno Mensual
+| Rank | Estrategia | Timeframe | Mensual % | Total % | MaxDD % | Sharpe | Trades/Mes | Win Rate |
+|------|-----------|-----------|-----------|---------|---------|--------|------------|----------|
+| 1 | **V3** | **30min** | **2.19%** | **272.0%** | -22.2% | 0.15 | 15.1 | 50.1% |
+| 2 | V6 | 15min | 1.88% | 232.6% | -22.2% | 0.10 | 73.8 | 49.7% |
+| 3 | V4 | 1h | 1.65% | 205.0% | -21.6% | 0.19 | 26.6 | 49.4% |
+| 4 | V8 | 30min | 1.51% | 187.3% | -25.4% | 0.13 | 23.1 | 49.8% |
+| 5 | V5 | 15min | 1.47% | 181.9% | -31.1% | 0.09 | 44.1 | 49.7% |
+| 6 | V1 | 30min | 1.37% | 169.5% | -27.3% | 0.12 | 29.6 | 50.0% |
+| 7 | V5 | 30min | 1.34% | 166.7% | -32.7% | 0.12 | 21.9 | 50.0% |
+| 8 | V8 | 15min | 1.34% | 166.1% | -27.6% | 0.08 | 46.1 | 49.8% |
+| 9 | V6 | 1h | 1.33% | 164.7% | -32.8% | 0.17 | 18.1 | 50.1% |
+| 10 | V3 | 15min | 1.30% | 161.2% | -22.6% | 0.08 | 30.8 | 50.2% |
+
+#### Mejor Timeframe por Estrategia
+| Estrategia | Parámetros | Mejor TF | Mensual % | MaxDD % | Sharpe |
+|-----------|------------|----------|-----------|---------|--------|
+| **V3** | fast=20, slow=50 | **30min** | **2.19%** | -22.2% | 0.15 |
+| V6 | fast=8, slow=21 | 15min | 1.88% | -22.2% | 0.10 |
+| V4 | fast=5, slow=15 | 1h | 1.65% | -21.6% | **0.19** |
+| V8 | fast=13, slow=34 | 30min | 1.51% | -25.4% | 0.13 |
+| V5 | fast=15, slow=35 | 15min | 1.47% | -31.1% | 0.09 |
+| V1 | fast=12, slow=26 | 30min | 1.37% | -27.3% | 0.12 |
+| V9 | fast=18, slow=55 | 15min | 1.23% | -23.2% | 0.08 |
+| V2 | fast=10, slow=20 | 1h | 1.22% | -27.5% | 0.16 |
+| V7 | fast=25, slow=75 | 1h | 0.94% | -29.1% | 0.14 |
+
+#### Promedio por Timeframe
+| Timeframe | Mensual Promedio | Mensual Máx | Mejor Estrategia |
+|-----------|-----------------|-------------|------------------|
+| **15min** | **1.22%** | 1.88% | V6 |
+| **30min** | **1.22%** | 2.19% | V3 |
+| 1h | 1.10% | 1.65% | V4 |
+| 4h | 0.59% | 1.24% | V8 |
+| 2h | 0.62% | 1.12% | V4 |
+| 3h | 0.40% | 0.75% | V5 |
+
+#### Promedio por Estrategia
+| Estrategia | Mensual Promedio | Más Consistente |
+|-----------|-----------------|------------------|
+| **V5** | **1.07%** | StdDev 0.33% |
+| **V8** | **1.07%** | StdDev 0.42% |
+| V4 | 1.04% | StdDev 0.40% |
+| V3 | 0.87% | StdDev 0.76% |
+| V6 | 0.85% | StdDev 0.66% |
+
+### Resultados GoldVolumeFusion (V1/V2/V3 × 7 TF)
+**Observación destacada: en timeframe 1D, todas las versiones superan 10% mensual con Sharpe >3.7**
+
+| Versión | TF | Mensual % | Total % | MaxDD % | Sharpe | Win Rate |
+|---------|----|-----------|---------|---------|--------|----------|
+| V1 | **1D** | **10.67%** | 170.8% | 5.4% | **3.93** | 83.2% |
+| V2 | **1D** | **10.38%** | 187.4% | 2.8% | **3.89** | 87.0% |
+| **V3** | **1D** | **11.73%** | **200.2%** | 7.0% | **3.78** | **83.4%** |
+| V3 | 2H | 0.81% | 22.7% | 8.6% | 1.07 | 52.8% |
+| V2 | 4H | 0.30% | 7.4% | 4.9% | 0.70 | 48.1% |
+
+> ⚠️ Los resultados 1D de GoldVolumeFusion requieren validación adicional — pueden indicar overfitting o lookahead bias en los indicadores de volumen en timeframe diario.
 
 ---
 
@@ -415,6 +480,9 @@ git add -A && git commit -m "descripción" && git push origin main
 
 | Fecha | Cambio |
 |-------|--------|
+| 2026-05-07 | ✅ Backtest completo: 9 estrategias MA-Cross × 6 TF (54 combinaciones, 2016-2026) |
+| 2026-05-07 | GoldVolumeFusion backtest revisado: V1/V2/V3 × 7 TF (resultados 1D destacados) |
+| 2026-05-07 | Mejor combinación MA-Cross: V3 30min — 2.19% mensual, 272% total, Sharpe 0.15 |
 | 2026-05-07 | ✅ Descarga COMPLETA: 170,701 barras M15 (2016-2026), 10.3 años, 7.1MB |
 | 2026-05-07 | 43,651 barras nuevas mergeadas (Q3-2024 → May-2026, 42.6 min) |
 | 2026-05-07 | Documento de escritorio creado: TRADING_LAB_ESTADO_COMPLETO.md |
