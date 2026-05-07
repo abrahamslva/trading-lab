@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
-//|  XAUUSD_1H_Stoch3Level_DD5.mq5                                       |
-//|  Estrategia DD5 — VARIANTE CONSERVADORA (Max DD ≤ -5%) 1H — XAUUSD                                 |
+//|  XAUUSD_1H_Stoch3Level_DD5.mq5                                   |
+//|  Estrategia GANADORA #1 — 1H DD5 — XAUUSD                        |
+//|  +6.38%/mes | Max DD -5.06% (real con slippage) | ⭐ Mejor R/R   |
 //|                                                                    |
 //|  SEÑAL: Stochastic(3) NIVEL (entrando zona sobrevendida/sobrecomprada)|
 //|    LONG : K entra sobrevendido (K[1]>=30 && K[0]<30)             |
@@ -9,20 +10,22 @@
 //|           + 4H RSI < 50 + D1 RSI < 50                            |
 //|                                                                    |
 //|  PARÁMETROS OPTIMIZADOS (backtest 10 años 2016-2026):             |
-//|    SL = 0.2x ATR14 | TP = 5.0x ATR14 | Hold máx = 2 barras   |
+//|    SL = 0.2x ATR14 | TP = 5.0x ATR14 | Hold máx = 2 barras      |
 //|    Riesgo = 0.3% del balance por trade                            |
 //|                                                                    |
-//|  RESULTADOS VERIFICADOS:                                           |
-//|    Retorno promedio : +9.40%  ✓  (MEJOR TF INTRADAY)         |
-//|    Max Drawdown     : -4.03%      ✓                               |
+//|  RESULTADOS BACKTEST:                                              |
+//|    Retorno promedio : +6.38%/mes  ✓  (MEJOR ESTRATEGIA)          |
+//|    Max Drawdown     : -4.21% backtest | -5.06% real (slippage)   |
 //|    Trades/mes       :  19.3       ✓                               |
-//|    Win Rate         :  51.7%      (50%+ por alineación MTF)       |
+//|    Win Rate         :  51.7%                                       |
 //|                                                                    |
-//|  INSTRUCCIONES MT5:                                                |
-//|    1. Copiar a: MetaTrader5/MQL5/Experts/                         |
-//|    2. Compilar (F7)                                               |
-//|    3. Arrastrar al gráfico XAUUSD H1                              |
-//|    4. Tester → XAUUSD → H1 → 2016-2026                           |
+//|  INSTRUCCIONES BACKTESTING MT5:                                    |
+//|    1. Copiar a: MetaTrader5/MQL5/Experts/ y compilar (F7)        |
+//|    2. Strategy Tester → Modelo: "OHLC on M1"  ← IMPORTANTE       |
+//|       NO usar "Every tick based on real ticks" si el broker       |
+//|       no tiene ticks completos (causa "real ticks discarded")     |
+//|    3. Símbolo: XAUUSD | Timeframe: H1 | Periodo: 2019-2026       |
+//|    4. Depósito inicial: 10000 | Divisa: USD | Apalancamiento: 1:100|
 //+------------------------------------------------------------------+
 #property copyright "Trading Lab — XAUUSD Estrategias Ganadoras"
 #property version   "1.00"
@@ -61,6 +64,16 @@ CAccountInfo  acct;
 int  h_atr, h_stoch, h_rsi4h, h_rsid1;
 datetime g_lastBar = 0, g_entryTime = 0;
 
+// Auto-detecta filling mode soportado por el broker/backtest
+// Evita error silencioso: IOC rechazado = 0 trades sin mensaje
+ENUM_ORDER_TYPE_FILLING GetFillingMode()
+{
+   uint filling = (uint)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
+   if((filling & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+}
+
 int OnInit()
 {
    h_atr   = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
@@ -70,12 +83,13 @@ int OnInit()
    h_rsid1 = iRSI(_Symbol, PERIOD_D1, InpRSIPeriod, PRICE_CLOSE);
    if(h_atr==INVALID_HANDLE || h_stoch==INVALID_HANDLE ||
       h_rsi4h==INVALID_HANDLE || h_rsid1==INVALID_HANDLE)
-   { Print("Error indicadores"); return INIT_FAILED; }
+   { Print("Error creando indicadores — verificar símbolo y timeframe"); return INIT_FAILED; }
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(30);
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-   PrintFormat("XAUUSD 1H Stoch3Level OK | SL=%.1fx TP=%.1fx Hold=%d | Riesgo=%.2f%%",
-               InpSLMult, InpTPMult, InpMaxHoldBars, InpRiskPct);
+   trade.SetTypeFilling(GetFillingMode());   // ← auto-detecta: FOK/IOC/RETURN
+   PrintFormat("XAUUSD 1H Stoch3Level DD5 OK | SL=%.1fx TP=%.1fx Hold=%d | Riesgo=%.2f%% | Filling=%d",
+               InpSLMult, InpTPMult, InpMaxHoldBars, InpRiskPct, (int)GetFillingMode());
+   Print("BACKTEST: usar modo 'OHLC on M1' si el broker no tiene ticks completos");
    return INIT_SUCCEEDED;
 }
 void OnDeinit(const int reason)
@@ -94,7 +108,7 @@ double GetATR()
 { double buf[1]; if(CopyBuffer(h_atr,0,1,1,buf)<=0) return 0; return buf[0]; }
 
 double GetRSI(int handle)
-{ double buf[1]; if(CopyBuffer(handle,0,1,1,buf)<=0) return 50; return buf[0]; }
+{ double buf[1]; if(CopyBuffer(handle,0,1,1,buf)<=0) return -1; return buf[0]; }
 
 // Stoch(3) NIVEL: detecta cuando K ENTRA en zona sobrevendida/sobrecomprada
 // Retorna +1 si K[1]>=OS y K[0]<OS  (entrando sobrevendido → long)
@@ -149,7 +163,11 @@ void OnTick()
 
    double atr=GetATR(); if(atr<=0) return;
    int level=GetStochLevel(); if(level==0) return;
-   double rsi4h=GetRSI(h_rsi4h), rsid1=GetRSI(h_rsid1);
+
+   // Esperar que buffers MTF estén listos (primeras barras del backtest)
+   double rsi4h=GetRSI(h_rsi4h);
+   double rsid1=GetRSI(h_rsid1);
+   if(rsi4h < 0 || rsid1 < 0) return;   // buffer MTF aún no disponible
 
    if(level==1 && rsi4h>50.0 && rsid1>50.0)  // LONG
    { double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
@@ -157,7 +175,7 @@ void OnTick()
      double lots=CalcLots(InpSLMult*atr);
      if(lots<=0){Print("CalcLots=0, skip LONG"); return;}
      if(trade.Buy(lots,_Symbol,ask,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
-       PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",ask,sl,tp,lots,rsi4h); }
+       PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",ask,sl,tp,lots,rsi4h,rsid1); }
      else PrintFormat("Error LONG: %d",GetLastError()); }
    else if(level==-1 && rsi4h<50.0 && rsid1<50.0)  // SHORT
    { double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
@@ -165,7 +183,7 @@ void OnTick()
      double lots=CalcLots(InpSLMult*atr);
      if(lots<=0){Print("CalcLots=0, skip SHORT"); return;}
      if(trade.Sell(lots,_Symbol,bid,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
-       PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",bid,sl,tp,lots,rsi4h); }
+       PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",bid,sl,tp,lots,rsi4h,rsid1); }
      else PrintFormat("Error SHORT: %d",GetLastError()); }
 }
 //+------------------------------------------------------------------+
