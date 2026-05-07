@@ -16,11 +16,11 @@
 
 | Archivo | Barras | Rango | Tamaño | Estado |
 |---------|--------|-------|--------|--------|
-| `data/dukascopy/XAUUSD_15min_mt5.parquet` | 127,050 | 2016-01-04 → 2024-06-28 | 5.2 MB | ✅ Base principal |
+| `data/dukascopy/XAUUSD_15min_mt5.parquet` | **170,701** | **2016-01-04 → 2026-05-06** | **7.1 MB** | ✅ **COMPLETO — 10.3 años** |
 | `data/dukascopy/XAUUSD_15min_yfinance.parquet` | 2,598 | 2016-01-04 → 2026-05-05 | 0.1 MB | ✅ Referencia diaria |
 | `data/dukascopy/XAUUSD_15min_yfinance_real.parquet` | 1,998 | 2026-04-06 → 2026-05-06 | 0.1 MB | ✅ Más reciente |
 
-### Extensión Trimestral Descargada (2024-07 → 2025-12)
+### Extensión Trimestral Descargada (2024-07 → 2026-05) — ✅ MERGEADA en mt5.parquet
 
 | Archivo | Barras | Rango |
 |---------|--------|-------|
@@ -30,19 +30,27 @@
 | `tmp_quarters/XAUUSD_15min_2025-04-01_2025-07-01.parquet` | 5,868 | Q2 2025 |
 | `tmp_quarters/XAUUSD_15min_2025-07-01_2025-10-01.parquet` | 6,046 | Q3 2025 |
 | `tmp_quarters/XAUUSD_15min_2025-10-01_2026-01-01.parquet` | 5,940 | Q4 2025 |
+| `tmp_quarters/XAUUSD_15min_2026-01-01_2026-04-01.parquet` | 5,756 | Q1 2026 |
+| `tmp_quarters/XAUUSD_15min_2026-04-01_2026-05-07.parquet` | 2,300 | Apr-May 2026 |
 
 ### Resumen Total de Datos
 
 ```
-TOTAL COMBINADO (MT5 + trimestrales): 162,643 barras
-RANGO CUBIERTO: 2016-01-04 → 2025-12-31
-PENDIENTE: 2026-01-01 → 2026-05-07 (~4 meses)
+✅ DESCARGA COMPLETADA — 2026-05-07 (42.6 min total)
 
-Por año:
-  2016: 14,920  |  2017: 14,971  |  2018: 14,486
-  2019: 14,639  |  2020: 15,147  |  2021: 15,011
-  2022: 15,481  |  2023: 14,899  |  2024: 19,451
-  2025: 23,638
+ARCHIVO FINAL: data/dukascopy/XAUUSD_15min_mt5.parquet
+TOTAL: 170,701 barras M15
+RANGO: 2016-01-04 → 2026-05-06
+TAMAÑO: 7.1 MB
+COBERTURA: 10.3 años completos
+BACKUP: XAUUSD_15min_mt5.parquet.bak
+
+Descarga por chunks:
+  Q3 2024: 6,052 barras (328s) | Q4 2024: 5,905 barras (404s)
+  Q1 2025: 5,784 barras (317s) | Q2 2025: 5,868 barras (322s)
+  Q3 2025: 6,046 barras (341s) | Q4 2025: 5,940 barras (332s)
+  Q1 2026: 5,756 barras (384s) | Apr-May 2026: 2,300 barras (129s)
+  TOTAL NUEVO: 43,651 barras agregadas
 ```
 
 ### Log de Descarga
@@ -407,7 +415,8 @@ git add -A && git commit -m "descripción" && git push origin main
 
 | Fecha | Cambio |
 |-------|--------|
-| 2026-05-07 | Descarga de datos Q3-2024 → Q4-2025 completada (35,593 barras nuevas) |
+| 2026-05-07 | ✅ Descarga COMPLETA: 170,701 barras M15 (2016-2026), 10.3 años, 7.1MB |
+| 2026-05-07 | 43,651 barras nuevas mergeadas (Q3-2024 → May-2026, 42.6 min) |
 | 2026-05-07 | Documento de escritorio creado: TRADING_LAB_ESTADO_COMPLETO.md |
 | 2026-05-05 | Agregados 7 repos IA: AutoGPT, Scira, Agent Zero, big-AGI, browser-use, Skyvern, AIHawk |
 | 2026-05-05 | knowledge_base/public_apis completada con 51 categorías (1,000+ APIs) |
