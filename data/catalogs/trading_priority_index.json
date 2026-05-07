@@ -1,0 +1,193 @@
+{
+  "priority_1": [
+    {
+      "name": "AQTrading",
+      "owner": "ccxt",
+      "url": "https://github.com/ccxt/ccxt",
+      "category": "trading_algorithms",
+      "stars": 30000,
+      "description": "Trading exchange API unificada (cripto principalmente)"
+    },
+    {
+      "name": "freqtrade",
+      "owner": "freqtrade",
+      "url": "https://github.com/freqtrade/freqtrade",
+      "category": "trading_bots",
+      "stars": 28000,
+      "description": "Bot trading automatizado profesional"
+    },
+    {
+      "name": "zipline",
+      "owner": "quantopian",
+      "url": "https://github.com/quantopian/zipline",
+      "category": "backtesting_frameworks",
+      "stars": 19729,
+      "description": "Framework backtesting profesional Python"
+    },
+    {
+      "name": "backtrader",
+      "owner": "mementum",
+      "url": "https://github.com/mementum/backtrader",
+      "category": "backtesting_frameworks",
+      "stars": 15000,
+      "description": "Trading backtest + paper trading"
+    },
+    {
+      "name": "yfinance",
+      "owner": "ranaroussi",
+      "url": "https://github.com/ranaroussi/yfinance",
+      "category": "data_collection",
+      "stars": 15000,
+      "description": "Descargador de datos Yahoo Finance"
+    },
+    {
+      "name": "ta-lib",
+      "owner": "mrjbq7",
+      "url": "https://github.com/mrjbq7/ta-lib",
+      "category": "technical_analysis",
+      "stars": 10000,
+      "description": "An\u00e1lisis t\u00e9cnico indicators (Python wrapper)"
+    },
+    {
+      "name": "optuna",
+      "owner": "optuna",
+      "url": "https://github.com/optuna/optuna",
+      "category": "optimization",
+      "stars": 10000,
+      "description": "Optimizaci\u00f3n Bayesiana de hiperpar\u00e1metros"
+    },
+    {
+      "name": "quant-trading",
+      "owner": "je-suis-tm",
+      "url": "https://github.com/je-suis-tm/quant-trading",
+      "category": "trading_algorithms",
+      "stars": 9792,
+      "description": "Repositorio completo de estrategias cuantitativas"
+    },
+    {
+      "name": "machine-learning-for-trading",
+      "owner": "stefan-jansen",
+      "url": "https://github.com/stefan-jansen/machine-learning-for-trading",
+      "category": "machine_learning",
+      "stars": 8000,
+      "description": "ML aplicado a trading con c\u00f3digo educativo"
+    },
+    {
+      "name": "rqalpha",
+      "owner": "ricequant",
+      "url": "https://github.com/ricequant/rqalpha",
+      "category": "trading_algorithms",
+      "stars": 6351,
+      "description": "Open source quantitative trading framework (China)"
+    },
+    {
+      "name": "python-binance",
+      "owner": "sammchardy",
+      "url": "https://github.com/sammchardy/python-binance",
+      "category": "broker_apis",
+      "stars": 6000,
+      "description": "Wrapper oficial Binance API"
+    },
+    {
+      "name": "pandas-ta",
+      "owner": "twopirllc",
+      "url": "https://github.com/twopirllc/pandas-ta",
+      "category": "technical_analysis",
+      "stars": 5000,
+      "description": "Indicators t\u00e9cnicos con pandas"
+    }
+  ],
+  "priority_2": [
+    {
+      "name": "plotly",
+      "owner": "plotly",
+      "url": "https://github.com/plotly/plotly.py",
+      "category": "visualization",
+      "stars": 15000,
+      "description": "Visualizaci\u00f3n interactiva de datos"
+    },
+    {
+      "name": "Gekko",
+      "owner": "askmike",
+      "url": "https://github.com/askmike/gekko",
+      "category": "trading_bots",
+      "stars": 12000,
+      "description": "Bot cripto trading Node.js"
+    },
+    {
+      "name": "hyperopt",
+      "owner": "hyperopt",
+      "url": "https://github.com/hyperopt/hyperopt",
+      "category": "optimization",
+      "stars": 7000,
+      "description": "Optimizaci\u00f3n distribuida de hiperpar\u00e1metros"
+    },
+    {
+      "name": "backtesting",
+      "owner": "kernc",
+      "url": "https://github.com/kernc/backtesting.py",
+      "category": "backtesting_frameworks",
+      "stars": 6500,
+      "description": "Backtesting ligero y simple"
+    },
+    {
+      "name": "vectorbt",
+      "owner": "polaurity",
+      "url": "https://github.com/polaurity/vectorbt",
+      "category": "backtesting_frameworks",
+      "stars": 5000,
+      "description": "Backtesting vectorizado ultra-r\u00e1pido"
+    },
+    {
+      "name": "stock-prediction-lstm",
+      "owner": "kaushikjadhav01",
+      "url": "https://github.com/kaushikjadhav01/Stock-Price-Prediction-LSTM-Deep-Learning",
+      "category": "machine_learning",
+      "stars": 3500,
+      "description": "Predicci\u00f3n de precios con LSTM"
+    },
+    {
+      "name": "mplfinance",
+      "owner": "matplotlib",
+      "url": "https://github.com/matplotlib/mplfinance",
+      "category": "visualization",
+      "stars": 3500,
+      "description": "Gr\u00e1ficos financieros con matplotlib"
+    },
+    {
+      "name": "pandas-datareader",
+      "owner": "pydata",
+      "url": "https://github.com/pydata/pandas-datareader",
+      "category": "data_collection",
+      "stars": 3000,
+      "description": "Lectura de datos financieros m\u00faltiples fuentes"
+    },
+    {
+      "name": "alpaca-trade-api-python",
+      "owner": "alpacahq",
+      "url": "https://github.com/alpacahq/alpaca-trade-api-python",
+      "category": "broker_apis",
+      "stars": 3000,
+      "description": "API oficial Alpaca (stock brokerage)"
+    },
+    {
+      "name": "tvDatafeed",
+      "owner": "rongardF",
+      "url": "https://github.com/rongardF/tvDatafeed",
+      "category": "data_collection",
+      "stars": 2000,
+      "description": "Datos de TradingView sin API"
+    }
+  ],
+  "summary": {
+    "backtesting_frameworks": 4,
+    "trading_algorithms": 3,
+    "data_collection": 3,
+    "machine_learning": 2,
+    "trading_bots": 2,
+    "technical_analysis": 2,
+    "broker_apis": 2,
+    "visualization": 2,
+    "optimization": 2
+  }
+}

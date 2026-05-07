@@ -1,0 +1,5 @@
+Strategy,Timeframe,Monthly Return %,Total Return %,Max Drawdown %,Sharpe Ratio,Trades/Month,Win Rate %,Worst Day %,Best Params,Passed
+GoldPropFusion_v2_OPT,30min,0.16,22.59,-9.05,0.1,2.5,41.0,-1.23,"{'sl_atr_mult': 2.0, 'tp2_ratio': 5.0, 'ema_fast': 20, 'ema_slow': 50}",✗
+GoldPropFusion_v2_OPT,1h,0.16,21.96,-7.76,0.15,1.7,41.8,-0.62,"{'sl_atr_mult': 1.5, 'tp2_ratio': 5.0, 'ema_fast': 20, 'ema_slow': 50}",✗
+GoldPropFusion_v2_OPT,3h,0.15,20.7,-5.44,0.27,1.5,44.8,-0.61,"{'sl_atr_mult': 2.5, 'tp2_ratio': 3.0, 'ema_fast': 20, 'ema_slow': 50}",✗
+GoldPropFusion_v2_OPT,15min,0.17,23.39,-11.73,0.06,3.8,39.0,-1.24,"{'sl_atr_mult': 2.5, 'tp2_ratio': 5.0, 'ema_fast': 10, 'ema_slow': 50}",✗

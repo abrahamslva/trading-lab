@@ -1206,13 +1206,16 @@ def main():
             print(f"  WARNING MT5 Server: {e}")
             _mt5_client = None
 
-    # ── FUENTE 2: Parquet MT5 exportado con export_history_to_parquet.py ──
+    # ── FUENTE 2: Parquet MT5 / Dukascopy / yfinance temporal ──────
     if not timeframes:
+        # Buscar cualquier parquet disponible (MT5 final > yfinance temp)
         _MT5_PARQUET = Path("data/dukascopy/XAUUSD_15min_mt5.parquet")
-        if _MT5_PARQUET.exists():
-            print(f"\n  ► Fuente: Parquet MT5 ({_MT5_PARQUET})")
+        _YF_PARQUET  = Path("data/dukascopy/XAUUSD_15min_yf_temp.parquet")
+        _PARQUET_TO_USE = _MT5_PARQUET if _MT5_PARQUET.exists() else (_YF_PARQUET if _YF_PARQUET.exists() else None)
+        if _PARQUET_TO_USE is not None and _PARQUET_TO_USE.exists():
+            print(f"\n  ► Fuente: Parquet ({_PARQUET_TO_USE.name})")
             try:
-                df_m15 = pd.read_parquet(_MT5_PARQUET)
+                df_m15 = pd.read_parquet(_PARQUET_TO_USE)
                 print(f"    M15: {len(df_m15)} barras  "
                       f"{df_m15.index[0].date()} → {df_m15.index[-1].date()}")
                 timeframes["M15"] = (df_m15, True)

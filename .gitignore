@@ -5,10 +5,13 @@ __pycache__/
 .env
 *.egg-info/
 
-# Data files grandes
+# Datos grandes (no subir al repo)
 data/lean-data/
-*.whl
-*.exe
+data/dukascopy/*.parquet
+*.parquet
+
+# ZIPs generados (se generan con el script de empaquetado)
+*.zip
 
 # Word temp files
 ~$*
@@ -16,3 +19,11 @@ data/lean-data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs (generados en runtime)
+data/logs/
+*.log
+
+# IDE
+.vscode/settings.json
+

@@ -183,6 +183,80 @@ class MT5Connector:
             raise RuntimeError(f"copy_rates_from_pos failed for {sym}: {err}")
         return [dict(r) for r in rates]
 
+    def get_history(
+        self,
+        symbol:    Optional[str] = None,
+        timeframe: int           = None,
+        start:     str           = "2016-01-01",
+        end:       Optional[str] = None,
+        chunk_months: int        = 6,
+    ) -> "pd.DataFrame":
+        """
+        Descarga histórico completo por rangos de fechas y devuelve
+        un DataFrame OHLCV con índice UTC.
+
+        Descarga en chunks para evitar timeouts en historiales largos.
+
+        Parámetros
+        ----------
+        symbol        : símbolo MT5 (default del config, e.g. "XAUUSD")
+        timeframe     : constante MT5, e.g. _mt5.TIMEFRAME_M15
+        start         : "YYYY-MM-DD" inicio del histórico
+        end           : "YYYY-MM-DD" fin (default = hoy)
+        chunk_months  : tamaño de cada chunk en meses (default 6)
+
+        Retorna
+        -------
+        pd.DataFrame con columnas [open, high, low, close, tick_volume]
+        e índice DatetimeIndex UTC.
+        """
+        import pandas as pd
+        from datetime import timezone, timedelta
+
+        self._require_connection()
+        sym = symbol or self._symbol
+        tf  = timeframe if timeframe is not None else _mt5.TIMEFRAME_M15
+
+        # Seleccionar símbolo en el terminal (necesario antes de copy_rates_range)
+        if not _mt5.symbol_select(sym, True):
+            raise RuntimeError(f"No se pudo seleccionar símbolo {sym} en MT5")
+
+        end_str   = end or __import__("datetime").date.today().strftime("%Y-%m-%d")
+        start_ts  = pd.Timestamp(start, tz="UTC")
+        end_ts    = pd.Timestamp(end_str, tz="UTC")
+
+        chunks = []
+        cur = start_ts
+        while cur < end_ts:
+            nxt = min(cur + pd.DateOffset(months=chunk_months), end_ts)
+            chunks.append((cur, nxt))
+            cur = nxt
+
+        all_frames = []
+        for i, (c_start, c_end) in enumerate(chunks, 1):
+            rates = _mt5.copy_rates_range(
+                sym, tf,
+                c_start.to_pydatetime().replace(tzinfo=timezone.utc),
+                c_end.to_pydatetime().replace(tzinfo=timezone.utc),
+            )
+            if rates is not None and len(rates) > 0:
+                df_c = pd.DataFrame(rates)
+                df_c["time"] = pd.to_datetime(df_c["time"], unit="s", utc=True)
+                df_c.set_index("time", inplace=True)
+                all_frames.append(df_c)
+            pct = i / len(chunks) * 100
+            logger.info("[%d/%d] %.0f%%  %s → %s  (%d barras)",
+                        i, len(chunks), pct, c_start.date(), c_end.date(),
+                        len(rates) if rates is not None else 0)
+
+        if not all_frames:
+            raise RuntimeError(f"No se obtuvieron datos de MT5 para {sym}")
+
+        df = pd.concat(all_frames).sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        cols = [c for c in ["open","high","low","close","tick_volume","spread"] if c in df.columns]
+        return df[cols]
+
     # ------------------------------------------------------------------
     # Account / positions
     # ------------------------------------------------------------------

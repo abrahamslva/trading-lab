@@ -1,0 +1,283 @@
+{
+  "quantopian": {
+    "repos": [
+      "zipline"
+    ],
+    "profile_url": "https://github.com/quantopian",
+    "description": "Empresa de trading algor\u00edtmico",
+    "notable_repos": [
+      "zipline",
+      "empyrical"
+    ],
+    "focus": [
+      "backtesting",
+      "research"
+    ]
+  },
+  "mementum": {
+    "repos": [
+      "backtrader"
+    ],
+    "profile_url": "https://github.com/mementum",
+    "description": "Creador de backtrader",
+    "notable_repos": [
+      "backtrader"
+    ],
+    "focus": [
+      "backtesting"
+    ]
+  },
+  "je-suis-tm": {
+    "repos": [
+      "quant-trading"
+    ],
+    "profile_url": "https://github.com/je-suis-tm",
+    "description": "Repositorio activo de estrategias cuantitativas",
+    "notable_repos": [
+      "quant-trading",
+      "Machine-Learning-Loans-Advances"
+    ],
+    "focus": [
+      "strategies",
+      "machine-learning"
+    ]
+  },
+  "ricequant": {
+    "repos": [
+      "rqalpha"
+    ],
+    "profile_url": "https://github.com/ricequant",
+    "description": "Plataforma trading chino",
+    "notable_repos": [
+      "rqalpha",
+      "rq-data"
+    ],
+    "focus": [
+      "backtesting",
+      "research"
+    ]
+  },
+  "ccxt": {
+    "repos": [
+      "AQTrading"
+    ],
+    "profile_url": "https://github.com/ccxt",
+    "description": "Unified exchange API gigante",
+    "notable_repos": [
+      "ccxt",
+      "ccxt.wiki"
+    ],
+    "focus": [
+      "exchange",
+      "crypto"
+    ]
+  },
+  "ranaroussi": {
+    "repos": [
+      "yfinance"
+    ],
+    "profile_url": "https://github.com/ranaroussi",
+    "description": "Creador de yfinance",
+    "notable_repos": [
+      "yfinance",
+      "pandas-datareader-fork"
+    ],
+    "focus": [
+      "data-collection"
+    ]
+  },
+  "stefan-jansen": {
+    "repos": [
+      "machine-learning-for-trading"
+    ],
+    "profile_url": "https://github.com/stefan-jansen",
+    "description": "ML for trading educador",
+    "notable_repos": [
+      "machine-learning-for-trading",
+      "ml4trading"
+    ],
+    "focus": [
+      "machine-learning",
+      "education"
+    ]
+  },
+  "freqtrade": {
+    "repos": [
+      "freqtrade"
+    ],
+    "profile_url": "https://github.com/freqtrade",
+    "description": "Equipo profesional bot trading",
+    "notable_repos": [
+      "freqtrade",
+      "freqtrade-strategies"
+    ],
+    "focus": [
+      "bot",
+      "automation"
+    ]
+  },
+  "askmike": {
+    "repos": [
+      "Gekko"
+    ],
+    "profile_url": "https://github.com/askmike",
+    "description": "Creador de Gekko",
+    "notable_repos": [
+      "gekko",
+      "gekko-strategies"
+    ],
+    "focus": [
+      "bot",
+      "crypto"
+    ]
+  },
+  "sammchardy": {
+    "repos": [
+      "python-binance"
+    ],
+    "profile_url": "https://github.com/sammchardy",
+    "description": "Binance API wrapper creador",
+    "notable_repos": [
+      "python-binance",
+      "python-kucoin",
+      "python-bitmex"
+    ],
+    "focus": [
+      "exchange",
+      "api-wrapper"
+    ]
+  },
+  "twopirllc": {
+    "repos": [
+      "pandas-ta"
+    ],
+    "profile_url": "https://github.com/twopirllc",
+    "description": "Indicadores t\u00e9cnicos pandas",
+    "notable_repos": [
+      "pandas-ta",
+      "pandas-ta-examples"
+    ],
+    "focus": [
+      "technical-analysis",
+      "indicators"
+    ]
+  },
+  "optuna": {
+    "repos": [
+      "optuna"
+    ],
+    "profile_url": "https://github.com/optuna",
+    "description": "Framework optimizaci\u00f3n Bayesiana",
+    "notable_repos": [
+      "optuna",
+      "optuna-examples"
+    ],
+    "focus": [
+      "optimization",
+      "ml"
+    ]
+  },
+  "hyperopt": {
+    "repos": [
+      "hyperopt"
+    ],
+    "profile_url": "https://github.com/hyperopt",
+    "description": "Optimizaci\u00f3n distribuida",
+    "notable_repos": [
+      "hyperopt",
+      "hyperopt-sklearn"
+    ],
+    "focus": [
+      "optimization",
+      "ml"
+    ]
+  },
+  "plotly": {
+    "repos": [
+      "plotly"
+    ],
+    "profile_url": "https://github.com/plotly",
+    "description": "Visualizaci\u00f3n interactiva",
+    "notable_repos": [
+      "plotly.py",
+      "plotly.js",
+      "dash"
+    ],
+    "focus": [
+      "visualization",
+      "analytics"
+    ]
+  },
+  "ruvnet": {
+    "repos": [
+      "ruflo",
+      "SAFLA",
+      "guardrail",
+      "FACT"
+    ],
+    "profile_url": "https://github.com/ruvnet",
+    "description": "Creador principal - AI trading agents",
+    "notable_repos": [
+      "ruflo",
+      "SAFLA",
+      "guardrail",
+      "FACT",
+      "agentic-flow",
+      "agency-agents",
+      "QuDAG",
+      "RuVector",
+      "dspy.ts",
+      "ruvbot",
+      "voicebot",
+      "rUv-dev"
+    ],
+    "focus": [
+      "ai-agents",
+      "trading",
+      "data-engineering"
+    ]
+  },
+  "D4Vinci": {
+    "repos": [
+      "Scrapling"
+    ],
+    "profile_url": "https://github.com/D4Vinci",
+    "description": "Creador de Scrapling web scraper",
+    "notable_repos": [
+      "Scrapling",
+      "Frida-Python",
+      "BadCode"
+    ],
+    "focus": [
+      "scraping",
+      "security"
+    ]
+  },
+  "chrisworsey55": {
+    "repos": [
+      "atlas-gic"
+    ],
+    "profile_url": "https://github.com/chrisworsey55",
+    "description": "Atlas - Investor algorithms",
+    "notable_repos": [
+      "atlas-gic"
+    ],
+    "focus": [
+      "algorithms",
+      "investment"
+    ]
+  },
+  "msitarzewski": {
+    "repos": [
+      "agency-agents"
+    ],
+    "profile_url": "https://github.com/msitarzewski",
+    "description": "Agency agents framework",
+    "notable_repos": [
+      "agency-agents"
+    ],
+    "focus": [
+      "ai-agents"
+    ]
+  }
+}

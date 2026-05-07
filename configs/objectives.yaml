@@ -2,10 +2,10 @@
 
 constraints:
   min_sharpe: 0.5             # Sharpe Ratio >= this
-  max_drawdown: 10.0          # Max Drawdown [%] <= this (absolute value, portfolio-wide)
-  max_daily_loss: 2.0         # Worst single-day loss [%] <= this
+  max_drawdown: 9.0           # Max Drawdown [%] <= this  [ACTUALIZADO: 10 → 9]
+  max_daily_loss: 5.0         # Worst single-day loss [%] <= this  [ACTUALIZADO: 2 → 5]
   min_trades_per_month: 7     # Minimum trades per calendar month (every month)
-  min_monthly_return: 1.5     # Minimum return [%] in the worst calendar month
+  min_monthly_return: 1.5     # Minimum return [%] en promedio mensual  [OBJETIVO PRINCIPAL]
 
 objective:
   # Primary metric to maximize (must satisfy constraints first)

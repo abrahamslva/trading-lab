@@ -1,0 +1,8 @@
+Strategy,Timeframe,Monthly Return %,Total Return %,Max Drawdown %,Sharpe Ratio,Trades/Month,Win Rate %,Worst Day %,SL exits,TP1+ exits,Passed
+GoldPropFusion_v2,15min,0.06,7.58,-16.77,0.02,3.9,37.6,-1.15,299,180,✗
+GoldPropFusion_v2,30min,0.13,18.05,-7.68,0.08,2.6,41.2,-1.19,187,131,✗
+GoldPropFusion_v2,1h,0.12,15.85,-6.48,0.13,1.7,41.5,-0.59,121,86,✗
+GoldPropFusion_v2,2h,0.01,1.44,-9.03,0.02,1.4,36.2,-0.97,113,64,✗
+GoldPropFusion_v2,3h,0.12,16.3,-6.0,0.19,1.6,42.6,-0.59,116,86,✗
+GoldPropFusion_v2,4h,-0.02,-2.0,-4.9,-0.06,0.3,28.6,-0.51,29,12,✗
+GoldPropFusion_v2,1D,-0.01,-1.02,-2.6,-0.16,0.1,25.0,-0.5,6,2,✗
