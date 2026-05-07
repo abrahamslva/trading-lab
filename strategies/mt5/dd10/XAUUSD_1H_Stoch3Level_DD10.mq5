@@ -111,16 +111,18 @@ int GetStochLevel()
 
 double CalcLots(double slDist)
 {
-   double riskUSD=acct.Balance()*InpRiskPct/100.0;
-   double tickVal=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
-   double tickSize=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
-   double lotStep=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-   double minLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
-   double maxLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
-   if(tickSize<=0||tickVal<=0||slDist<=0) return minLot;
-   double lots=riskUSD/(slDist/tickSize*tickVal);
-   lots=MathFloor(lots/lotStep)*lotStep;
-   return MathMax(minLot,MathMin(maxLot,lots));
+   double riskUSD  = acct.Balance() * InpRiskPct / 100.0;
+   double tickVal  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double lotStep  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(tickSize <= 0 || tickVal <= 0 || slDist <= 0 || lotStep <= 0) return minLot;
+   double lots = riskUSD / (slDist / tickSize * tickVal);
+   int    digits = (int)MathRound(-MathLog10(lotStep));  // e.g. lotStep=0.01 → digits=2
+   lots = NormalizeDouble(MathFloor(lots / lotStep) * lotStep, digits);
+   if(lots < minLot) lots = minLot;
+   return MathMin(maxLot, lots);
 }
 
 bool HasPosition()
@@ -153,13 +155,17 @@ void OnTick()
    { double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
      double sl=ask-InpSLMult*atr, tp=ask+InpTPMult*atr;
      double lots=CalcLots(InpSLMult*atr);
+     if(lots<=0){Print("CalcLots=0, skip LONG"); return;}
      if(trade.Buy(lots,_Symbol,ask,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
-       PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",ask,sl,tp,lots,rsi4h); } }
+       PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",ask,sl,tp,lots,rsi4h); }
+     else PrintFormat("Error LONG: %d",GetLastError()); }
    else if(level==-1 && rsi4h<50.0 && rsid1<50.0)  // SHORT
    { double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
      double sl=bid+InpSLMult*atr, tp=bid-InpTPMult*atr;
      double lots=CalcLots(InpSLMult*atr);
+     if(lots<=0){Print("CalcLots=0, skip SHORT"); return;}
      if(trade.Sell(lots,_Symbol,bid,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
-       PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",bid,sl,tp,lots,rsi4h); } }
+       PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f",bid,sl,tp,lots,rsi4h); }
+     else PrintFormat("Error SHORT: %d",GetLastError()); }
 }
 //+------------------------------------------------------------------+
