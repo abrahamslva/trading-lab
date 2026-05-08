@@ -4,9 +4,9 @@
 //|  +6.38%/mes | Max DD -5.06% (real con slippage) | ⭐ Mejor R/R   |
 //|                                                                    |
 //|  SEÑAL: Stochastic(3) NIVEL (entrando zona sobrevendida/sobrecomprada)|
-//|    LONG : K entra sobrevendido (K[1]>=30 && K[0]<30)             |
+//|    LONG : K[prev]>=30 && K[last]<30 (K cruza hacia abajo por 30) |
 //|           + 4H RSI > 50 + D1 RSI > 50                            |
-//|    SHORT: K entra sobrecomprado (K[1]<=70 && K[0]>70)            |
+//|    SHORT: K[prev]<=70 && K[last]>70 (K cruza hacia arriba por 70)|
 //|           + 4H RSI < 50 + D1 RSI < 50                            |
 //|                                                                    |
 //|  PARÁMETROS OPTIMIZADOS (backtest 10 años 2016-2026):             |
@@ -101,8 +101,9 @@ bool IsNewBar()
 
 bool IsSessionOK()
 { MqlDateTime dt; TimeToStruct(TimeCurrent(),dt);
-  if(dt.day_of_week==0||dt.day_of_week==6) return false;
-  return(dt.hour>=InpSessStart && dt.hour<InpSessEnd); }
+  // Solo filtrar fines de semana — igual que backtest Python (time_ok = dayofweek < 5)
+  // Python NO filtra por hora, solo por día de semana
+  return(dt.day_of_week >= 1 && dt.day_of_week <= 5); }
 
 double GetATR()
 { double buf[1]; if(CopyBuffer(h_atr,0,1,1,buf)<=0) return 0; return buf[0]; }
@@ -111,15 +112,16 @@ double GetRSI(int handle)
 { double buf[1]; if(CopyBuffer(handle,0,1,1,buf)<=0) return -1; return buf[0]; }
 
 // Stoch(3) NIVEL: detecta cuando K ENTRA en zona sobrevendida/sobrecomprada
-// Retorna +1 si K[1]>=OS y K[0]<OS  (entrando sobrevendido → long)
-// Retorna -1 si K[1]<=OB y K[0]>OB  (entrando sobrecomprado → short)
+// CopyBuffer sin ArraySetAsSeries: k[0]=bar2(anterior), k[1]=bar1(última cerrada)
+// LONG : k[0]>=30 && k[1]<30 → K cruzó hacia abajo por 30 (entra sobrevendido)  ← igual que Python: (sk<30)&(sk_p>=30)
+// SHORT: k[0]<=70 && k[1]>70 → K cruzó hacia arriba por 70 (entra sobrecomprado) ← igual que Python: (sk>70)&(sk_p<=70)
 int GetStochLevel()
 {
    double k[2];
    if(CopyBuffer(h_stoch, MAIN_LINE, 1, 2, k) <= 0) return 0;
-   // k[0]=barra 1 (ultima cerrada), k[1]=barra 2 (anterior)
-   if(k[1] >= (double)InpOSLevel && k[0] < (double)InpOSLevel) return  1;
-   if(k[1] <= (double)InpOBLevel && k[0] > (double)InpOBLevel) return -1;
+   // k[0]=bar2(anterior/más vieja), k[1]=bar1(última cerrada)
+   if(k[0] >= (double)InpOSLevel && k[1] < (double)InpOSLevel) return  1;  // LONG: entra sobrevendido
+   if(k[0] <= (double)InpOBLevel && k[1] > (double)InpOBLevel) return -1;  // SHORT: entra sobrecomprado
    return 0;
 }
 
@@ -159,31 +161,53 @@ void OnTick()
    if(!IsNewBar()) return;
    ManageTimeExit();
    if(HasPosition()) return;
-   if(!IsSessionOK()) return;
 
-   double atr=GetATR(); if(atr<=0) return;
-   int level=GetStochLevel(); if(level==0) return;
+   // ── DIAGNÓSTICO: contar por qué se bloquean las señales ──
+   static long cntBars=0, cntSess=0, cntATR=0, cntStoch=0, cntRSI=0, cntFilt=0, cntTrades=0;
+   cntBars++;
 
-   // Esperar que buffers MTF estén listos (primeras barras del backtest)
+   if(!IsSessionOK()) { cntSess++; return; }
+
+   double atr=GetATR();
+   if(atr<=0) { cntATR++; return; }
+
+   int level=GetStochLevel();
+   if(level==0) { cntStoch++; return; }
+
    double rsi4h=GetRSI(h_rsi4h);
    double rsid1=GetRSI(h_rsid1);
-   if(rsi4h < 0 || rsid1 < 0) return;   // buffer MTF aún no disponible
+   if(rsi4h < 0 || rsid1 < 0) { cntRSI++;
+      // Imprimir si MTF tarda demasiado (ayuda a detectar problema de datos)
+      if(cntRSI<=5) PrintFormat("DIAG RSI MTF no listo aún: bar %d rsi4h=%.1f rsid1=%.1f",cntBars,rsi4h,rsid1);
+      return; }
 
-   if(level==1 && rsi4h>50.0 && rsid1>50.0)  // LONG
+   bool longOK  = (level== 1 && rsi4h>50.0 && rsid1>50.0);
+   bool shortOK = (level==-1 && rsi4h<50.0 && rsid1<50.0);
+   if(!longOK && !shortOK) { cntFilt++;
+      // Imprimir cada 500 señales bloqueadas por filtro RSI (diagnóstico)
+      if(cntFilt==1||cntFilt%500==0) PrintFormat("DIAG RSI-filter bloqueó señal #%d: level=%d RSI4H=%.1f RSI1D=%.1f",cntFilt,level,rsi4h,rsid1);
+      return; }
+
+   // Imprimir resumen cada 30 días (≈720 barras H1)
+   if(cntBars%720==0)
+      PrintFormat("DIAG barras=%d sess=%d atr=%d noStoch=%d rsiMTF=%d rsiFilt=%d trades=%d",
+                  cntBars,cntSess,cntATR,cntStoch,cntRSI,cntFilt,cntTrades);
+
+   if(longOK)  // LONG
    { double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
      double sl=ask-InpSLMult*atr, tp=ask+InpTPMult*atr;
      double lots=CalcLots(InpSLMult*atr);
      if(lots<=0){Print("CalcLots=0, skip LONG"); return;}
-     if(trade.Buy(lots,_Symbol,ask,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
+     if(trade.Buy(lots,_Symbol,ask,sl,tp,InpComment)) { g_entryTime=TimeCurrent(); cntTrades++;
        PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",ask,sl,tp,lots,rsi4h,rsid1); }
-     else PrintFormat("Error LONG: %d",GetLastError()); }
-   else if(level==-1 && rsi4h<50.0 && rsid1<50.0)  // SHORT
+     else PrintFormat("Error LONG #%d: %d",cntTrades+1,GetLastError()); }
+   else  // SHORT
    { double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
      double sl=bid+InpSLMult*atr, tp=bid-InpTPMult*atr;
      double lots=CalcLots(InpSLMult*atr);
      if(lots<=0){Print("CalcLots=0, skip SHORT"); return;}
-     if(trade.Sell(lots,_Symbol,bid,sl,tp,InpComment)) { g_entryTime=TimeCurrent();
+     if(trade.Sell(lots,_Symbol,bid,sl,tp,InpComment)) { g_entryTime=TimeCurrent(); cntTrades++;
        PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",bid,sl,tp,lots,rsi4h,rsid1); }
-     else PrintFormat("Error SHORT: %d",GetLastError()); }
+     else PrintFormat("Error SHORT #%d: %d",cntTrades+1,GetLastError()); }
 }
 //+------------------------------------------------------------------+
