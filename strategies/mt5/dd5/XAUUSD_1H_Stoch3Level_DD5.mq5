@@ -63,6 +63,7 @@ CPositionInfo posInfo;
 CAccountInfo  acct;
 int  h_atr, h_stoch, h_rsi4h, h_rsid1;
 datetime g_lastBar = 0, g_entryTime = 0;
+double   g_sl_check = 0, g_tp_check = 0;  // niveles manuales SL/TP (estilo Python _bt)
 
 // Auto-detecta filling mode soportado por el broker/backtest
 // Evita error silencioso: IOC rechazado = 0 trades sin mensaje
@@ -157,20 +158,48 @@ bool HasPosition()
     if(posInfo.SelectByIndex(i)&&posInfo.Symbol()==_Symbol&&posInfo.Magic()==InpMagic) return true;
   return false; }
 
-void ManageTimeExit()
-{ if(g_entryTime==0) return;
-  for(int i=PositionsTotal()-1;i>=0;i--)
-  { if(!posInfo.SelectByIndex(i)) continue;
-    if(posInfo.Symbol()!=_Symbol||posInfo.Magic()!=InpMagic) continue;
-    int barsHeld=iBarShift(_Symbol,PERIOD_CURRENT,g_entryTime,false);
-    if(barsHeld>=InpMaxHoldBars)
-    { if(trade.PositionClose(posInfo.Ticket())) { g_entryTime=0; Print("Cierre tiempo: ",barsHeld," barras"); } }
-    break; } }
+// Replica EXACTAMENTE la lógica de Python _bt:
+// - entry bar (held=1 en MT5): NO se chequea SL/TP (Python omite la barra de entry)
+// - held=2: chequea bar 1 (= barra entry+1) con su OHLC completo → igual que Python
+// - Si no hay hit de SL/TP: time exit al open de la barra actual (= Python's time exit)
+// CRÍTICO: NO usar hard SL/TP en la orden — el SL=0.2×ATR sería disparado
+//          por ruido M1 en la barra de entry, que Python ignora completamente.
+void ManagePosition()
+{
+   if(g_entryTime == 0) return;
+   int held = iBarShift(_Symbol, PERIOD_CURRENT, g_entryTime, false);
+   // held=1: barra de entry recién cerrada → Python la ignora, nosotros también
+   // held=2: barra entry+1 es bar[1] → corresponde al chequeo Python held=1
+   if(held < 2) return;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+      // bar[1] = barra entry+1 (la que sigue a la barra de entry)
+      // Exactamente igual que Python: if bo<=sl or bl<=sl → SL; if bo>=tp or bh>=tp → TP
+      double bo = iOpen(_Symbol,  PERIOD_CURRENT, 1);
+      double bh = iHigh(_Symbol,  PERIOD_CURRENT, 1);
+      double bl = iLow(_Symbol,   PERIOD_CURRENT, 1);
+      bool   isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
+      bool   slHit = isBuy ? (bo <= g_sl_check || bl <= g_sl_check)
+                           : (bo >= g_sl_check || bh >= g_sl_check);
+      bool   tpHit = isBuy ? (bo >= g_tp_check || bh >= g_tp_check)
+                           : (bo <= g_tp_check || bl <= g_tp_check);
+      string why = (tpHit && !slHit) ? "TP" : slHit ? "SL" : "TIME";
+      if(trade.PositionClose(posInfo.Ticket()))
+      {  PrintFormat("EXIT %s | held=%d | bo=%.2f bh=%.2f bl=%.2f | SL_chk=%.2f TP_chk=%.2f",
+                     why, held, bo, bh, bl, g_sl_check, g_tp_check);
+         g_entryTime = 0; g_sl_check = 0; g_tp_check = 0;
+      }
+      else PrintFormat("Error close: %d", GetLastError());
+      break;
+   }
+}
 
 void OnTick()
 {
    if(!IsNewBar()) return;
-   ManageTimeExit();
+   ManagePosition();
    if(HasPosition()) return;
 
    // ── DIAGNÓSTICO: contar por qué se bloquean las señales ──
@@ -204,21 +233,32 @@ void OnTick()
       PrintFormat("DIAG barras=%d sess=%d atr=%d noStoch=%d rsiMTF=%d rsiFilt=%d trades=%d",
                   cntBars,cntSess,cntATR,cntStoch,cntRSI,cntFilt,cntTrades);
 
-   if(longOK)  // LONG
-   { double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-     double sl=ask-InpSLMult*atr, tp=ask+InpTPMult*atr;
-     double lots=CalcLots(InpSLMult*atr);
-     if(lots<=0){Print("CalcLots=0, skip LONG"); return;}
-     if(trade.Buy(lots,_Symbol,ask,sl,tp,InpComment)) { g_entryTime=TimeCurrent(); cntTrades++;
-       PrintFormat("▲ LONG %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",ask,sl,tp,lots,rsi4h,rsid1); }
-     else PrintFormat("Error LONG #%d: %d",cntTrades+1,GetLastError()); }
-   else  // SHORT
-   { double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-     double sl=bid+InpSLMult*atr, tp=bid-InpTPMult*atr;
-     double lots=CalcLots(InpSLMult*atr);
-     if(lots<=0){Print("CalcLots=0, skip SHORT"); return;}
-     if(trade.Sell(lots,_Symbol,bid,sl,tp,InpComment)) { g_entryTime=TimeCurrent(); cntTrades++;
-       PrintFormat("▼ SHORT %.2f SL=%.2f TP=%.2f lots=%.2f RSI4H=%.1f RSI1D=%.1f",bid,sl,tp,lots,rsi4h,rsid1); }
-     else PrintFormat("Error SHORT #%d: %d",cntTrades+1,GetLastError()); }
+   double slDist = InpSLMult * atr;
+   double lots    = CalcLots(slDist);
+   if(lots <= 0) { Print("CalcLots=0, skip"); return; }
+
+   if(longOK)  // LONG — sin hard SL/TP: Python no chequea la barra de entry
+   { double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+     // SL/TP se chequean manualmente al cierre de la barra H1 siguiente (ManagePosition)
+     if(trade.Buy(lots, _Symbol, ask, 0, 0, InpComment))
+     {  g_entryTime = TimeCurrent();
+        g_sl_check  = ask - slDist;           // 0.2×ATR por debajo
+        g_tp_check  = ask + InpTPMult * atr;  // 5.0×ATR por encima
+        cntTrades++;
+        PrintFormat("▲ LONG %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f | RSI4H=%.1f RSI1D=%.1f",
+                    lots, ask, g_sl_check, g_tp_check, rsi4h, rsid1);
+     }
+     else PrintFormat("Error LONG #%d: %d", cntTrades+1, GetLastError()); }
+   else  // SHORT — sin hard SL/TP
+   { double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+     if(trade.Sell(lots, _Symbol, bid, 0, 0, InpComment))
+     {  g_entryTime = TimeCurrent();
+        g_sl_check  = bid + slDist;           // 0.2×ATR por encima
+        g_tp_check  = bid - InpTPMult * atr;  // 5.0×ATR por debajo
+        cntTrades++;
+        PrintFormat("▼ SHORT %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f | RSI4H=%.1f RSI1D=%.1f",
+                    lots, bid, g_sl_check, g_tp_check, rsi4h, rsid1);
+     }
+     else PrintFormat("Error SHORT #%d: %d", cntTrades+1, GetLastError()); }
 }
 //+------------------------------------------------------------------+
