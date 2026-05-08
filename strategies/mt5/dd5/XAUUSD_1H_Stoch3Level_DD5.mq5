@@ -223,7 +223,9 @@ void ManagePosition()
       {
          if(!posInfo.SelectByIndex(i)) continue;
          if(posInfo.Symbol()!=_Symbol || posInfo.Magic()!=InpMagic) continue;
-         if(posInfo.StopLoss() == 0 && g_sl_check > 0)
+         // NOTA: SafeSL (10×ATR) ya fue seteado en la orden de entrada, por eso
+         // StopLoss() != 0. No usar "== 0" como guardia — siempre actualizar a SL real.
+         if(g_sl_check > 0 && MathAbs(posInfo.StopLoss() - g_sl_check) > SymbolInfoDouble(_Symbol, SYMBOL_POINT))
          {
             if(trade.PositionModify(posInfo.Ticket(), g_sl_check, g_tp_check))
                PrintFormat("SL/TP SET sl=%.2f tp=%.2f | dist_sl=%.2f dist_tp=%.2f",
