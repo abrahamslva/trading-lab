@@ -36,10 +36,11 @@
 #include <Trade\AccountInfo.mqh>
 
 input group "══ GESTIÓN DE RIESGO ══"
-input double InpRiskPct     = 0.3;
-input double InpSLMult      = 0.2;
-input double InpTPMult      = 5.0;
-input int    InpMaxHoldBars = 2;
+input double InpRiskPct     = 0.3;   // % del balance arriesgado por trade
+input double InpSLMult      = 0.2;   // SL = N × ATR14
+input double InpTPMult      = 5.0;   // TP = N × ATR14
+input int    InpMaxHoldBars = 2;     // Barras máximas en posición
+input int    InpLeverage    = 100;   // Apalancamiento (debe coincidir con el del Tester)
 
 input group "══ INDICADORES ══"
 input int    InpATRPeriod   = 14;
@@ -128,29 +129,30 @@ int GetStochLevel()
 
 double CalcLots(double slDist)
 {
-   double riskUSD  = acct.Balance() * InpRiskPct / 100.0;
-   double tickVal  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double lotStep  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   double minLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   if(tickSize <= 0 || tickVal <= 0 || slDist <= 0 || lotStep <= 0) return minLot;
+   double riskUSD     = acct.Balance() * InpRiskPct / 100.0;
+   double tickVal     = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize    = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double lotStep     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minLot      = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot      = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double contractSz  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(tickSize<=0||tickVal<=0||slDist<=0||lotStep<=0||contractSz<=0) return minLot;
+
+   // Lotes por riesgo fijo (método Python: RP% del balance)
    double lots = riskUSD / (slDist / tickSize * tickVal);
+
+   // Límite por apalancamiento — usa InpLeverage (no depende del setting del Tester)
+   // max_lots = balance × apalancamiento / (precio × tamaño_contrato)
+   double ask         = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double maxByLev    = (ask * contractSz > 0)
+                        ? (acct.Balance() * InpLeverage) / (ask * contractSz)
+                        : maxLot;
+   lots = MathMin(lots, maxByLev);
+
    int    digits = (int)MathRound(-MathLog10(lotStep));
    lots = NormalizeDouble(MathFloor(lots / lotStep) * lotStep, digits);
-   if(lots < minLot) lots = minLot;
-   lots = MathMin(maxLot, lots);
-   // Verificar que hay margen suficiente (evita error "no money" / 4756)
-   double marginNeeded = 0;
-   if(!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, lots,
-                       SymbolInfoDouble(_Symbol,SYMBOL_ASK), marginNeeded))
-      marginNeeded = 0;
-   double freeMargin = acct.FreeMargin();
-   if(marginNeeded > 0 && marginNeeded > freeMargin * 0.95)
-   {  PrintFormat("WARN: margen insuficiente (necesita %.2f, libre %.2f). Verificar apalancamiento en Tester (usar 1:100).",
-                  marginNeeded, freeMargin);
-      return 0; }
-   return lots;
+   if(lots < minLot) return minLot;
+   return MathMin(maxLot, lots);
 }
 
 bool HasPosition()
@@ -158,56 +160,52 @@ bool HasPosition()
     if(posInfo.SelectByIndex(i)&&posInfo.Symbol()==_Symbol&&posInfo.Magic()==InpMagic) return true;
   return false; }
 
-// Replica EXACTAMENTE la lógica de Python _bt en 2 fases:
+// Replica la lógica de Python _bt verificando OHLC de bar[1] manualmente:
 //
-// FASE 1 — held=1 (barra de entry recién cerrada):
-//   Python: chequea bar[entry+1] OHLC contra SL/TP
-//   MT5:    PositionModify → agrega SL/TP duro a la posición
-//           MT5 los chequea con ticks M1 de bar[entry+1] (equivalente)
-//   RESULTADO: si SL → cierre ~$30 pérdida (=ru) | si TP → cierre ~$150 ganancia ✓
+// Python _bt: signal en bar[0] → entry en op[0] → chequea OHLC de bar[1] → time exit en op[2]
+// MT5:        entry en bar[0] open → held=2 (bar[2] abre) → consulta OHLC de bar[1] → cierre
 //
-// FASE 2 — held>=2 (bar[entry+2] abre = time exit):
-//   Python: sale al open de bar[entry+2]
-//   MT5:    cierre a mercado (≈ open de bar[2])
+// IMPORTANTE — por qué NO usar PositionModify:
+//   PositionModify al inicio de bar[1] pone SL/TP ANTES de que bar[1] se forme.
+//   Si bar[1] abre con GAP por debajo del SL (común en OHLC M1), el SL se activa
+//   inmediatamente al precio del GAP (no al precio del SL), generando pérdidas
+//   enormes. Python ignora este gap y siempre cierra exactamente en el SL.
 //
-// CRÍTICO: sl=0, tp=0 en la orden de entry → evita que ruido M1 de la
-//          barra de entry dispare el SL (era el bug de 73% tasa pérdida)
+// SOLUCIÓN: SL de seguridad (10×ATR) en la orden de entry para evitar ruinas;
+//   verificación manual de OHLC de bar[1] al abrir bar[2].
 void ManagePosition()
 {
-   // Si la posición fue cerrada por SL/TP nativo (MT5 la cerró solo), limpiar estado
    if(!HasPosition()) { g_entryTime=0; g_sl_check=0; g_tp_check=0; return; }
    if(g_entryTime == 0) return;
 
    int held = iBarShift(_Symbol, PERIOD_CURRENT, g_entryTime, false);
+   // held=1: bar de entry cerrada, bar[1] aún no terminó → esperar
+   if(held < 2) return;
 
-   if(held == 1)
+   // held >= 2: bar[1] completamente formada (index=1)
+   // Chequear OHLC de bar[1] igual que Python _bt
+   for(int i = PositionsTotal()-1; i >= 0; i--)
    {
-      // Barra de entry cerrada → FASE 1: activar SL/TP duros en la posición
-      for(int i = PositionsTotal()-1; i >= 0; i--)
-      {  if(!posInfo.SelectByIndex(i)) continue;
-         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
-         if(posInfo.StopLoss() == 0 && g_sl_check > 0)
-         {  if(trade.PositionModify(posInfo.Ticket(), g_sl_check, g_tp_check))
-               PrintFormat("SL/TP set: SL=%.2f TP=%.2f", g_sl_check, g_tp_check);
-            else PrintFormat("Error PositionModify: %d", GetLastError()); }
-         break; }
-      return;
-   }
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
 
-   if(held >= 2)
-   {
-      // FASE 2: time exit — posición sobrevivió bar[entry+1] sin hit SL/TP
-      for(int i = PositionsTotal()-1; i >= 0; i--)
-      {  if(!posInfo.SelectByIndex(i)) continue;
-         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
-         double px = (posInfo.PositionType()==POSITION_TYPE_BUY)
-                     ? SymbolInfoDouble(_Symbol,SYMBOL_BID)
-                     : SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-         if(trade.PositionClose(posInfo.Ticket()))
-         {  PrintFormat("EXIT TIME held=%d market=%.2f", held, px);
-            g_entryTime=0; g_sl_check=0; g_tp_check=0; }
-         else PrintFormat("Error time-exit: %d", GetLastError());
-         break; }
+      bool   isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
+      double bh    = iHigh(_Symbol, PERIOD_CURRENT, 1);  // bar[1] high
+      double bl    = iLow (_Symbol, PERIOD_CURRENT, 1);  // bar[1] low
+
+      // Python chequea SL primero, luego TP (SL tiene prioridad)
+      string why = "TIME";
+      if( isBuy && (bl <= g_sl_check))  why = "SL";
+      else if( isBuy && (bh >= g_tp_check))  why = "TP";
+      else if(!isBuy && (bh >= g_sl_check))  why = "SL";
+      else if(!isBuy && (bl <= g_tp_check))  why = "TP";
+
+      if(trade.PositionClose(posInfo.Ticket()))
+      {  PrintFormat("EXIT %s held=%d | bar1 H=%.2f L=%.2f | SL_chk=%.2f TP_chk=%.2f",
+                     why, held, bh, bl, g_sl_check, g_tp_check);
+         g_entryTime=0; g_sl_check=0; g_tp_check=0; }
+      else PrintFormat("Error close %s: %d", why, GetLastError());
+      break;
    }
 }
 
@@ -252,27 +250,30 @@ void OnTick()
    double lots    = CalcLots(slDist);
    if(lots <= 0) { Print("CalcLots=0, skip"); return; }
 
-   if(longOK)  // LONG — sin hard SL/TP: Python no chequea la barra de entry
-   { double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-     // SL/TP se chequean manualmente al cierre de la barra H1 siguiente (ManagePosition)
-     if(trade.Buy(lots, _Symbol, ask, 0, 0, InpComment))
+   if(longOK)  // LONG
+   { double ask  = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+     // Orden con SL de seguridad a 10×ATR (sólo contra catástrofe/gap enorme)
+     // El SL real (0.2×ATR) y TP se verifican manualmente en ManagePosition() al abrir bar[2]
+     double safeSL = NormalizeDouble(ask - 10.0 * atr, (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS));
+     if(trade.Buy(lots, _Symbol, ask, safeSL, 0, InpComment))
      {  g_entryTime = TimeCurrent();
-        g_sl_check  = ask - slDist;           // 0.2×ATR por debajo
-        g_tp_check  = ask + InpTPMult * atr;  // 5.0×ATR por encima
+        g_sl_check  = ask - slDist;           // 0.2×ATR — usado en chequeo OHLC
+        g_tp_check  = ask + InpTPMult * atr;  // 5.0×ATR — usado en chequeo OHLC
         cntTrades++;
-        PrintFormat("▲ LONG %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f | RSI4H=%.1f RSI1D=%.1f",
-                    lots, ask, g_sl_check, g_tp_check, rsi4h, rsid1);
+        PrintFormat("▲ LONG %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f SafeSL=%.2f | RSI4H=%.1f D1=%.1f",
+                    lots, ask, g_sl_check, g_tp_check, safeSL, rsi4h, rsid1);
      }
      else PrintFormat("Error LONG #%d: %d", cntTrades+1, GetLastError()); }
-   else  // SHORT — sin hard SL/TP
-   { double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-     if(trade.Sell(lots, _Symbol, bid, 0, 0, InpComment))
+   else  // SHORT
+   { double bid  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+     double safeSL = NormalizeDouble(bid + 10.0 * atr, (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS));
+     if(trade.Sell(lots, _Symbol, bid, safeSL, 0, InpComment))
      {  g_entryTime = TimeCurrent();
-        g_sl_check  = bid + slDist;           // 0.2×ATR por encima
-        g_tp_check  = bid - InpTPMult * atr;  // 5.0×ATR por debajo
+        g_sl_check  = bid + slDist;           // 0.2×ATR
+        g_tp_check  = bid - InpTPMult * atr;  // 5.0×ATR
         cntTrades++;
-        PrintFormat("▼ SHORT %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f | RSI4H=%.1f RSI1D=%.1f",
-                    lots, bid, g_sl_check, g_tp_check, rsi4h, rsid1);
+        PrintFormat("▼ SHORT %.2f | entry=%.2f SL_chk=%.2f TP_chk=%.2f SafeSL=%.2f | RSI4H=%.1f D1=%.1f",
+                    lots, bid, g_sl_check, g_tp_check, safeSL, rsi4h, rsid1);
      }
      else PrintFormat("Error SHORT #%d: %d", cntTrades+1, GetLastError()); }
 }
