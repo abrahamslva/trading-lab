@@ -44,7 +44,12 @@ input group "══ GESTIÓN DE RIESGO ══"
 input double InpRiskPct     = 0.3;  // % del balance arriesgado por trade
 input double InpSLMult      = 0.2;  // SL = InpSLMult × ATR14
 input double InpTPMult      = 5.0;  // TP = SL × InpTPMult = 0.2×5 = 1.0 × ATR14
-input int    InpMaxHoldBars = 2;    // Barras máximas en posición (time exit)
+input int    InpMaxHoldBars = 1;    // HOLD MT5→Python: 1 = Python HOLD 2
+                                    //   Entry bar[i+1] → check OHLC bar[i+1] → time exit bar[i+2]
+                                    //   MT5 held=iBarShift(g_entryTime): 0=entry bar, 1=next bar
+                                    //   held>=1 → time exit al open de bar[i+2] = Python op[i+2]
+                                    //   NOTA: InpMaxHoldBars=2 deja SL/TP activos en bar[i+2] también,
+                                    //   convirtiendo 30% de time exits en SL perdedores extras → WR 12%!
 input int    InpLeverage    = 100;  // Apalancamiento para cálculo de lotes
 
 input group "══ INDICADORES ══"
