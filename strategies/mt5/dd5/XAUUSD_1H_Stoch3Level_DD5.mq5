@@ -44,11 +44,11 @@ input int    InpLeverage    = 100;   // Apalancamiento (debe coincidir con el de
 
 input group "══ INDICADORES ══"
 input int    InpATRPeriod   = 14;
-input int    InpStochK      = 3;      // Período corto — clave de la estrategia
-input int    InpStochD      = 3;
-input int    InpStochSlow   = 3;
-input int    InpOSLevel     = 30;     // Nivel sobrevendido (long)
-input int    InpOBLevel     = 70;     // Nivel sobrecomprado (short)
+input int    InpStochK      = 3;   // Período %K — igual que Python stoch_k(df, 3)
+input int    InpStochD      = 1;   // %D suavizado — 1 = sin suavizado (igual que Python)
+input int    InpStochSlow   = 1;   // Slow — 1 = sin suavizado extra (igual que Python raw K)
+input int    InpOSLevel     = 30;  // Nivel sobrevendido (long)
+input int    InpOBLevel     = 70;  // Nivel sobrecomprado (short)
 input int    InpRSIPeriod   = 14;
 
 input group "══ SESIÓN (UTC) ══"
@@ -160,52 +160,57 @@ bool HasPosition()
     if(posInfo.SelectByIndex(i)&&posInfo.Symbol()==_Symbol&&posInfo.Magic()==InpMagic) return true;
   return false; }
 
-// Replica la lógica de Python _bt verificando OHLC de bar[1] manualmente:
+// Replica la lógica de Python _bt:
 //
-// Python _bt: signal en bar[0] → entry en op[0] → chequea OHLC de bar[1] → time exit en op[2]
-// MT5:        entry en bar[0] open → held=2 (bar[2] abre) → consulta OHLC de bar[1] → cierre
+// Python: signal bar[0] → entry op[0] → chequea OHLC bar[1] → time exit op[2]
 //
-// IMPORTANTE — por qué NO usar PositionModify:
-//   PositionModify al inicio de bar[1] pone SL/TP ANTES de que bar[1] se forme.
-//   Si bar[1] abre con GAP por debajo del SL (común en OHLC M1), el SL se activa
-//   inmediatamente al precio del GAP (no al precio del SL), generando pérdidas
-//   enormes. Python ignora este gap y siempre cierra exactamente en el SL.
+// PROBLEMA ANTERIOR (close-at-market bar[2]):
+//   Cuando SL toca en bar[1], XAUUSD continúa en momentum en bar[2]
+//   → MT5 cierra a 4.6× el SL esperado ($138 vs $30)
 //
-// SOLUCIÓN: SL de seguridad (10×ATR) en la orden de entry para evitar ruinas;
-//   verificación manual de OHLC de bar[1] al abrir bar[2].
+// SOLUCIÓN (PositionModify al abrir bar[1]):
+//   Al inicio de bar[1] (held=1) activar SL/TP duros en la posición.
+//   MT5 usa ticks M1 dentro de bar[1] para ejecutar SL/TP.
+//   Gap entre M1 bars = ~1 min vs gap entre H1 bars = ~60 min → slippage mínimo.
+//   Si ni SL ni TP se activan en bar[1]: time exit al inicio de bar[2] (mercado).
+//
+// TIMING:
+//   held=0: entry bar (recién abierta) → NO SL/TP (evita ruido M1 de la barra de entry)
+//   held=1: bar[1] abre → PositionModify activa SL/TP → MT5 ejecuta dentro de bar[1]
+//   held=2: bar[2] abre → si posición sigue abierta = time exit (bar[1] no tocó SL/TP)
 void ManagePosition()
 {
    if(!HasPosition()) { g_entryTime=0; g_sl_check=0; g_tp_check=0; return; }
    if(g_entryTime == 0) return;
 
    int held = iBarShift(_Symbol, PERIOD_CURRENT, g_entryTime, false);
-   // held=1: bar de entry cerrada, bar[1] aún no terminó → esperar
-   if(held < 2) return;
 
-   // held >= 2: bar[1] completamente formada (index=1)
-   // Chequear OHLC de bar[1] igual que Python _bt
-   for(int i = PositionsTotal()-1; i >= 0; i--)
+   if(held == 1)
    {
-      if(!posInfo.SelectByIndex(i)) continue;
-      if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+      // Bar[1] acaba de abrir: activar SL/TP duros
+      // MT5 los ejecutará usando ticks M1 dentro de bar[1] ← rellena en ~sl_check/tp_check
+      for(int i = PositionsTotal()-1; i >= 0; i--)
+      {  if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+         if(posInfo.StopLoss() == 0 && g_sl_check > 0)
+         {  if(!trade.PositionModify(posInfo.Ticket(), g_sl_check, g_tp_check))
+               PrintFormat("Error PositionModify (held=1): %d", GetLastError()); }
+         break; }
+      return;
+   }
 
-      bool   isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
-      double bh    = iHigh(_Symbol, PERIOD_CURRENT, 1);  // bar[1] high
-      double bl    = iLow (_Symbol, PERIOD_CURRENT, 1);  // bar[1] low
-
-      // Python chequea SL primero, luego TP (SL tiene prioridad)
-      string why = "TIME";
-      if( isBuy && (bl <= g_sl_check))  why = "SL";
-      else if( isBuy && (bh >= g_tp_check))  why = "TP";
-      else if(!isBuy && (bh >= g_sl_check))  why = "SL";
-      else if(!isBuy && (bl <= g_tp_check))  why = "TP";
-
-      if(trade.PositionClose(posInfo.Ticket()))
-      {  PrintFormat("EXIT %s held=%d | bar1 H=%.2f L=%.2f | SL_chk=%.2f TP_chk=%.2f",
-                     why, held, bh, bl, g_sl_check, g_tp_check);
-         g_entryTime=0; g_sl_check=0; g_tp_check=0; }
-      else PrintFormat("Error close %s: %d", why, GetLastError());
-      break;
+   if(held >= 2)
+   {
+      // Time exit: bar[1] no tocó SL ni TP → cerrar al inicio de bar[2] (mercado)
+      // Equivale a Python: time exit en op[entry+2]
+      for(int i = PositionsTotal()-1; i >= 0; i--)
+      {  if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+         if(trade.PositionClose(posInfo.Ticket()))
+         {  PrintFormat("EXIT TIME held=%d | SL_chk=%.2f TP_chk=%.2f", held, g_sl_check, g_tp_check);
+            g_entryTime=0; g_sl_check=0; g_tp_check=0; }
+         else PrintFormat("Error time-exit: %d", GetLastError());
+         break; }
    }
 }
 
