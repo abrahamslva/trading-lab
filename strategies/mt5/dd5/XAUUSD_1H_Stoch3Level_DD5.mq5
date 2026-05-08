@@ -67,8 +67,6 @@ CAccountInfo  acct;
 int      h_atr, h_stoch, h_ema;
 datetime g_lastBar   = 0;
 datetime g_entryTime = 0;
-double   g_sl_check  = 0;   // SL real (0.2×ATR) — se activa al abrir bar[1]
-double   g_tp_check  = 0;   // TP real (1.0×ATR) — se activa al abrir bar[1]
 
 //+------------------------------------------------------------------+
 ENUM_ORDER_TYPE_FILLING GetFillingMode()
@@ -193,56 +191,28 @@ bool HasPosition()
 }
 
 //+------------------------------------------------------------------+
-// ManagePosition — replica Python _bt timing exacto:
+// ManagePosition — time exit a las InpMaxHoldBars barras
 //
-//  Python _bt:
-//    entry = op[i]          (abrir en bar i)
-//    check OHLC[i+1] vs sl/tp
-//    time_exit = op[i+2]    (si ni SL ni TP se activaron en bar i+1)
+//  SL y TP se ponen DIRECTAMENTE en la orden de entrada (trade.Buy/Sell).
+//  No se usa PositionModify — esto eliminaba 1 barra de delay crítico.
 //
-//  MT5 equivalente:
-//    held=0: barra de entry abierta → solo SafeSL 10×ATR activo
-//    held=1: bar siguiente abre → PositionModify(SL, TP) reales
-//            MT5 usa ticks M1 dentro de esa barra para ejecutarlos
-//    held≥2: si posición sigue abierta → time exit (= Python op[i+2])
+//  Lógica de salida:
+//    - SL/TP: MT5 los ejecuta automáticamente via ticks M1 desde bar[i+1]
+//    - Time exit: si la posición sigue abierta al abrir bar[i+2], cerrar
 //
-//  g_sl_check = entry ± 0.2×ATR   (= Python sl)
-//  g_tp_check = entry ± 1.0×ATR   (= Python tp = sl × tp_r = 0.2×5×ATR)
+//  held = barras transcurridas desde la barra de entry
+//    held=1: la barra de chequeo (bar[i+1]) ya cerró pero SL/TP no tocó
+//    held≥2: time exit
 //+------------------------------------------------------------------+
 void ManagePosition()
 {
-   if(!HasPosition()) { g_entryTime=0; g_sl_check=0; g_tp_check=0; return; }
+   if(!HasPosition()) { g_entryTime=0; return; }
    if(g_entryTime == 0) return;
 
    int held = iBarShift(_Symbol, PERIOD_CURRENT, g_entryTime, false);
 
-   // held=1: activar SL y TP reales vía PositionModify
-   if(held == 1)
-   {
-      for(int i = PositionsTotal()-1; i >= 0; i--)
-      {
-         if(!posInfo.SelectByIndex(i)) continue;
-         if(posInfo.Symbol()!=_Symbol || posInfo.Magic()!=InpMagic) continue;
-         // NOTA: SafeSL (10×ATR) ya fue seteado en la orden de entrada, por eso
-         // StopLoss() != 0. No usar "== 0" como guardia — siempre actualizar a SL real.
-         if(g_sl_check > 0 && MathAbs(posInfo.StopLoss() - g_sl_check) > SymbolInfoDouble(_Symbol, SYMBOL_POINT))
-         {
-            if(trade.PositionModify(posInfo.Ticket(), g_sl_check, g_tp_check))
-               PrintFormat("SL/TP SET sl=%.2f tp=%.2f | dist_sl=%.2f dist_tp=%.2f",
-                           g_sl_check, g_tp_check,
-                           MathAbs(posInfo.PriceOpen()-g_sl_check),
-                           MathAbs(posInfo.PriceOpen()-g_tp_check));
-            else
-               PrintFormat("WARN PositionModify error=%d sl=%.2f tp=%.2f",
-                           GetLastError(), g_sl_check, g_tp_check);
-         }
-         break;
-      }
-      return;
-   }
-
-   // held≥2: time exit al mercado
-   if(held >= 2)
+   // Time exit cuando se cumple el hold máximo
+   if(held >= InpMaxHoldBars)
    {
       for(int i = PositionsTotal()-1; i >= 0; i--)
       {
@@ -251,7 +221,7 @@ void ManagePosition()
          if(trade.PositionClose(posInfo.Ticket()))
          {
             PrintFormat("EXIT TIME held=%d pnl=%.2f", held, posInfo.Profit());
-            g_entryTime=0; g_sl_check=0; g_tp_check=0;
+            g_entryTime=0;
          }
          else PrintFormat("Error time-exit: %d", GetLastError());
          break;
@@ -294,33 +264,33 @@ void OnTick()
    double lots   = CalcLots(slDist);
    if(lots <= 0) { Print("CalcLots=0, skip"); return; }
 
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
    if(longOK)
    {
-      double ask    = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double safeSL = NormalizeDouble(ask - 10.0*atr, (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS));
-      if(trade.Buy(lots, _Symbol, ask, safeSL, 0, InpComment))
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double sl  = NormalizeDouble(ask - slDist, digits);  // 0.2×ATR — activo desde bar[i+1]
+      double tp  = NormalizeDouble(ask + tpDist, digits);  // 1.0×ATR — activo desde bar[i+1]
+      if(trade.Buy(lots, _Symbol, ask, sl, tp, InpComment))
       {
          g_entryTime = TimeCurrent();
-         g_sl_check  = ask - slDist;   // 0.2 × ATR
-         g_tp_check  = ask + tpDist;   // 1.0 × ATR (= slDist × InpTPMult)
          cTrades++;
          PrintFormat("▲ BUY  %.2f | ask=%.2f SL=%.2f TP=%.2f ATR=%.2f",
-                     lots, ask, g_sl_check, g_tp_check, atr);
+                     lots, ask, sl, tp, atr);
       }
       else PrintFormat("Error BUY: %d", GetLastError());
    }
    else
    {
-      double bid    = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double safeSL = NormalizeDouble(bid + 10.0*atr, (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS));
-      if(trade.Sell(lots, _Symbol, bid, safeSL, 0, InpComment))
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double sl  = NormalizeDouble(bid + slDist, digits);  // 0.2×ATR
+      double tp  = NormalizeDouble(bid - tpDist, digits);  // 1.0×ATR
+      if(trade.Sell(lots, _Symbol, bid, sl, tp, InpComment))
       {
          g_entryTime = TimeCurrent();
-         g_sl_check  = bid + slDist;   // 0.2 × ATR
-         g_tp_check  = bid - tpDist;   // 1.0 × ATR (= slDist × InpTPMult)
          cTrades++;
          PrintFormat("▼ SELL %.2f | bid=%.2f SL=%.2f TP=%.2f ATR=%.2f",
-                     lots, bid, g_sl_check, g_tp_check, atr);
+                     lots, bid, sl, tp, atr);
       }
       else PrintFormat("Error SELL: %d", GetLastError());
    }
