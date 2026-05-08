@@ -158,41 +158,56 @@ bool HasPosition()
     if(posInfo.SelectByIndex(i)&&posInfo.Symbol()==_Symbol&&posInfo.Magic()==InpMagic) return true;
   return false; }
 
-// Replica EXACTAMENTE la lógica de Python _bt:
-// - entry bar (held=1 en MT5): NO se chequea SL/TP (Python omite la barra de entry)
-// - held=2: chequea bar 1 (= barra entry+1) con su OHLC completo → igual que Python
-// - Si no hay hit de SL/TP: time exit al open de la barra actual (= Python's time exit)
-// CRÍTICO: NO usar hard SL/TP en la orden — el SL=0.2×ATR sería disparado
-//          por ruido M1 en la barra de entry, que Python ignora completamente.
+// Replica EXACTAMENTE la lógica de Python _bt en 2 fases:
+//
+// FASE 1 — held=1 (barra de entry recién cerrada):
+//   Python: chequea bar[entry+1] OHLC contra SL/TP
+//   MT5:    PositionModify → agrega SL/TP duro a la posición
+//           MT5 los chequea con ticks M1 de bar[entry+1] (equivalente)
+//   RESULTADO: si SL → cierre ~$30 pérdida (=ru) | si TP → cierre ~$150 ganancia ✓
+//
+// FASE 2 — held>=2 (bar[entry+2] abre = time exit):
+//   Python: sale al open de bar[entry+2]
+//   MT5:    cierre a mercado (≈ open de bar[2])
+//
+// CRÍTICO: sl=0, tp=0 en la orden de entry → evita que ruido M1 de la
+//          barra de entry dispare el SL (era el bug de 73% tasa pérdida)
 void ManagePosition()
 {
+   // Si la posición fue cerrada por SL/TP nativo (MT5 la cerró solo), limpiar estado
+   if(!HasPosition()) { g_entryTime=0; g_sl_check=0; g_tp_check=0; return; }
    if(g_entryTime == 0) return;
+
    int held = iBarShift(_Symbol, PERIOD_CURRENT, g_entryTime, false);
-   // held=1: barra de entry recién cerrada → Python la ignora, nosotros también
-   // held=2: barra entry+1 es bar[1] → corresponde al chequeo Python held=1
-   if(held < 2) return;
-   for(int i = PositionsTotal()-1; i >= 0; i--)
+
+   if(held == 1)
    {
-      if(!posInfo.SelectByIndex(i)) continue;
-      if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
-      // bar[1] = barra entry+1 (la que sigue a la barra de entry)
-      // Exactamente igual que Python: if bo<=sl or bl<=sl → SL; if bo>=tp or bh>=tp → TP
-      double bo = iOpen(_Symbol,  PERIOD_CURRENT, 1);
-      double bh = iHigh(_Symbol,  PERIOD_CURRENT, 1);
-      double bl = iLow(_Symbol,   PERIOD_CURRENT, 1);
-      bool   isBuy = (posInfo.PositionType() == POSITION_TYPE_BUY);
-      bool   slHit = isBuy ? (bo <= g_sl_check || bl <= g_sl_check)
-                           : (bo >= g_sl_check || bh >= g_sl_check);
-      bool   tpHit = isBuy ? (bo >= g_tp_check || bh >= g_tp_check)
-                           : (bo <= g_tp_check || bl <= g_tp_check);
-      string why = (tpHit && !slHit) ? "TP" : slHit ? "SL" : "TIME";
-      if(trade.PositionClose(posInfo.Ticket()))
-      {  PrintFormat("EXIT %s | held=%d | bo=%.2f bh=%.2f bl=%.2f | SL_chk=%.2f TP_chk=%.2f",
-                     why, held, bo, bh, bl, g_sl_check, g_tp_check);
-         g_entryTime = 0; g_sl_check = 0; g_tp_check = 0;
-      }
-      else PrintFormat("Error close: %d", GetLastError());
-      break;
+      // Barra de entry cerrada → FASE 1: activar SL/TP duros en la posición
+      for(int i = PositionsTotal()-1; i >= 0; i--)
+      {  if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+         if(posInfo.StopLoss() == 0 && g_sl_check > 0)
+         {  if(trade.PositionModify(posInfo.Ticket(), g_sl_check, g_tp_check))
+               PrintFormat("SL/TP set: SL=%.2f TP=%.2f", g_sl_check, g_tp_check);
+            else PrintFormat("Error PositionModify: %d", GetLastError()); }
+         break; }
+      return;
+   }
+
+   if(held >= 2)
+   {
+      // FASE 2: time exit — posición sobrevivió bar[entry+1] sin hit SL/TP
+      for(int i = PositionsTotal()-1; i >= 0; i--)
+      {  if(!posInfo.SelectByIndex(i)) continue;
+         if(posInfo.Symbol() != _Symbol || posInfo.Magic() != InpMagic) continue;
+         double px = (posInfo.PositionType()==POSITION_TYPE_BUY)
+                     ? SymbolInfoDouble(_Symbol,SYMBOL_BID)
+                     : SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+         if(trade.PositionClose(posInfo.Ticket()))
+         {  PrintFormat("EXIT TIME held=%d market=%.2f", held, px);
+            g_entryTime=0; g_sl_check=0; g_tp_check=0; }
+         else PrintFormat("Error time-exit: %d", GetLastError());
+         break; }
    }
 }
 
