@@ -135,10 +135,21 @@ double CalcLots(double slDist)
    double maxLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    if(tickSize <= 0 || tickVal <= 0 || slDist <= 0 || lotStep <= 0) return minLot;
    double lots = riskUSD / (slDist / tickSize * tickVal);
-   int    digits = (int)MathRound(-MathLog10(lotStep));  // e.g. lotStep=0.01 → digits=2
+   int    digits = (int)MathRound(-MathLog10(lotStep));
    lots = NormalizeDouble(MathFloor(lots / lotStep) * lotStep, digits);
    if(lots < minLot) lots = minLot;
-   return MathMin(maxLot, lots);
+   lots = MathMin(maxLot, lots);
+   // Verificar que hay margen suficiente (evita error "no money" / 4756)
+   double marginNeeded = 0;
+   if(!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, lots,
+                       SymbolInfoDouble(_Symbol,SYMBOL_ASK), marginNeeded))
+      marginNeeded = 0;
+   double freeMargin = acct.FreeMargin();
+   if(marginNeeded > 0 && marginNeeded > freeMargin * 0.95)
+   {  PrintFormat("WARN: margen insuficiente (necesita %.2f, libre %.2f). Verificar apalancamiento en Tester (usar 1:100).",
+                  marginNeeded, freeMargin);
+      return 0; }
+   return lots;
 }
 
 bool HasPosition()
